@@ -1,12 +1,14 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { v4 as uuid } from 'uuid'
-import type { SavedGame, Game } from '../types'
+import type { SavedGame, GameState, TableTerrain, Unit, GamePhase } from '../types'
 
 interface GameStore {
   savedGames: SavedGame[]
-  currentGame: Game | null
+  currentGame: GameState | null
   hasUnsavedChanges: boolean
+  defaultTableWidth: number
+  defaultTableHeight: number
 
   createGame: (name: string) => string
   loadGame: (id: string) => void
@@ -14,9 +16,41 @@ interface GameStore {
   saveCurrentGame: () => void
   exitToMenu: () => void
   markChanged: () => void
+
+  setTableDimensions: (width: number, height: number) => void
+  setWindDirection: (direction: number) => void
+  setPhase: (phase: GamePhase) => void
+  nextTurn: () => void
+  setBackgroundImage: (dataUrl: string) => void
+
+  addTerrain: (vertices: { x: number; y: number }[], type: TableTerrain['type']) => void
+  updateTerrain: (id: string, updates: Partial<TableTerrain>) => void
+  removeTerrain: (id: string) => void
+
+  addUnit: (unit: Unit) => void
+  updateUnit: (id: string, updates: Partial<Unit>) => void
+  removeUnit: (id: string) => void
 }
 
 const now = () => new Date().toISOString()
+
+function createInitialGame(name: string, defaultWidth: number, defaultHeight: number): GameState {
+  const id = uuid()
+  const timestamp = now()
+  return {
+    id,
+    name,
+    createdAt: timestamp,
+    updatedAt: timestamp,
+    tableWidth: defaultWidth,
+    tableHeight: defaultHeight,
+    windDirection: 0,
+    terrain: [],
+    units: [],
+    currentTurn: 1,
+    currentPhase: 'setup',
+  }
+}
 
 export const useGameStore = create<GameStore>()(
   persist(
@@ -24,38 +58,41 @@ export const useGameStore = create<GameStore>()(
       savedGames: [],
       currentGame: null,
       hasUnsavedChanges: false,
+      defaultTableWidth: 1200,
+      defaultTableHeight: 900,
 
       createGame: (name) => {
-        const id = uuid()
-        const timestamp = now()
-        const game: Game = {
-          id,
-          name,
-          createdAt: timestamp,
-          updatedAt: timestamp,
-          settings: {
-            tableWidth: 1200,
-            tableHeight: 900,
-            windDirection: 0,
-          },
-          units: [],
-          currentTurn: 1,
-        }
+        const { defaultTableWidth, defaultTableHeight } = get()
+        const game = createInitialGame(name, defaultTableWidth, defaultTableHeight)
         set((state) => ({
           savedGames: [
             ...state.savedGames,
-            { id, name, createdAt: timestamp, updatedAt: timestamp, unitCount: 0 },
+            { id: game.id, name, createdAt: game.createdAt, updatedAt: game.updatedAt, unitCount: 0 },
           ],
           currentGame: game,
           hasUnsavedChanges: true,
         }))
-        return id
+        return game.id
       },
 
       loadGame: (id) => {
         const stored = localStorage.getItem(`game-${id}`)
         if (stored) {
-          const game = JSON.parse(stored) as Game
+          const raw = JSON.parse(stored)
+          const game: GameState = {
+            id: raw.id,
+            name: raw.name,
+            createdAt: raw.createdAt,
+            updatedAt: raw.updatedAt,
+            tableWidth: raw.tableWidth ?? raw.settings?.tableWidth ?? 1200,
+            tableHeight: raw.tableHeight ?? raw.settings?.tableHeight ?? 900,
+            windDirection: raw.windDirection ?? raw.settings?.windDirection ?? 0,
+            terrain: raw.terrain ?? [],
+            units: raw.units ?? [],
+            currentTurn: raw.currentTurn ?? 1,
+            currentPhase: raw.currentPhase ?? 'setup',
+            backgroundImage: raw.backgroundImage,
+          }
           set({ currentGame: game, hasUnsavedChanges: false })
         }
       },
@@ -86,17 +123,159 @@ export const useGameStore = create<GameStore>()(
       },
 
       exitToMenu: () => {
+        const { currentGame, savedGames } = get()
+        if (currentGame) {
+          const stored = localStorage.getItem(`game-${currentGame.id}`)
+          if (!stored) {
+            set({
+              savedGames: savedGames.filter((g) => g.id !== currentGame.id),
+            })
+          }
+        }
         set({ currentGame: null, hasUnsavedChanges: false })
       },
 
       markChanged: () => {
         set({ hasUnsavedChanges: true })
       },
+
+      setTableDimensions: (width, height) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: { ...game, tableWidth: width, tableHeight: height, updatedAt: now() },
+          defaultTableWidth: width,
+          defaultTableHeight: height,
+          hasUnsavedChanges: true,
+        })
+      },
+
+      setWindDirection: (direction) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: { ...game, windDirection: direction, updatedAt: now() },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      setPhase: (phase) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: { ...game, currentPhase: phase, updatedAt: now() },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      nextTurn: () => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            currentTurn: game.currentTurn + 1,
+            currentPhase: 'orders',
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      setBackgroundImage: (dataUrl) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: { ...game, backgroundImage: dataUrl, updatedAt: now() },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      addTerrain: (vertices, type) => {
+        const game = get().currentGame
+        if (!game) return
+        const terrain: TableTerrain = { id: uuid(), vertices, type }
+        set({
+          currentGame: {
+            ...game,
+            terrain: [...game.terrain, terrain],
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      updateTerrain: (id, updates) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            terrain: game.terrain.map((t) => (t.id === id ? { ...t, ...updates } : t)),
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      removeTerrain: (id) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            terrain: game.terrain.filter((t) => t.id !== id),
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      addUnit: (unit) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            units: [...game.units, unit],
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      updateUnit: (id, updates) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            units: game.units.map((u) => (u.id === id ? { ...u, ...updates } : u)),
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      removeUnit: (id) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            units: game.units.filter((u) => u.id !== id),
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
     }),
     {
       name: 'wargame-ai-store',
       partialize: (state) => ({
         savedGames: state.savedGames,
+        defaultTableWidth: state.defaultTableWidth,
+        defaultTableHeight: state.defaultTableHeight,
       }),
     }
   )
