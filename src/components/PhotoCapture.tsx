@@ -1,6 +1,97 @@
 import { useRef, useState, useCallback, useEffect } from 'react'
 import { useGameStore } from '../stores/gameStore'
 
+function computeHomography(from: { x: number; y: number }[], to: { x: number; y: number }[]): number[] {
+  const n = 8
+  const A: number[][] = Array.from({ length: n }, () => Array(n).fill(0))
+  const b: number[] = Array(n).fill(0)
+
+  for (let i = 0; i < 4; i++) {
+    const fx = from[i].x
+    const fy = from[i].y
+    const tx = to[i].x
+    const ty = to[i].y
+
+    const r1 = i * 2
+    A[r1][0] = fx; A[r1][1] = fy; A[r1][2] = 1
+    A[r1][3] = 0; A[r1][4] = 0; A[r1][5] = 0
+    A[r1][6] = -fx * tx; A[r1][7] = -fy * tx
+    b[r1] = tx
+
+    const r2 = r1 + 1
+    A[r2][0] = 0; A[r2][1] = 0; A[r2][2] = 0
+    A[r2][3] = fx; A[r2][4] = fy; A[r2][5] = 1
+    A[r2][6] = -fx * ty; A[r2][7] = -fy * ty
+    b[r2] = ty
+  }
+
+  for (let col = 0; col < n; col++) {
+    let maxRow = col
+    let maxVal = Math.abs(A[col][col])
+    for (let row = col + 1; row < n; row++) {
+      const val = Math.abs(A[row][col])
+      if (val > maxVal) { maxVal = val; maxRow = row }
+    }
+    if (maxVal < 1e-12) continue
+    ;[A[col], A[maxRow]] = [A[maxRow], A[col]]
+    ;[b[col], b[maxRow]] = [b[maxRow], b[col]]
+
+    for (let row = col + 1; row < n; row++) {
+      const factor = A[row][col] / A[col][col]
+      for (let j = col; j < n; j++) A[row][j] -= factor * A[col][j]
+      b[row] -= factor * b[col]
+    }
+  }
+
+  const h: number[] = Array(n).fill(0)
+  for (let i = n - 1; i >= 0; i--) {
+    let sum = b[i]
+    for (let j = i + 1; j < n; j++) sum -= A[i][j] * h[j]
+    h[i] = sum / A[i][i]
+  }
+  h.push(1)
+  return h
+}
+
+function applyHomography(h: number[], x: number, y: number): { x: number; y: number } {
+  const d = h[6] * x + h[7] * y + h[8]
+  if (Math.abs(d) < 1e-12) return { x: 0, y: 0 }
+  return {
+    x: (h[0] * x + h[1] * y + h[2]) / d,
+    y: (h[3] * x + h[4] * y + h[5]) / d,
+  }
+}
+
+function sampleBilinear(
+  pixels: Uint8ClampedArray,
+  w: number,
+  h: number,
+  x: number,
+  y: number,
+  out: Uint8ClampedArray,
+  offset: number,
+): void {
+  const x0 = Math.max(0, Math.min(w - 1, Math.floor(x)))
+  const y0 = Math.max(0, Math.min(h - 1, Math.floor(y)))
+  const x1 = Math.min(x0 + 1, w - 1)
+  const y1 = Math.min(y0 + 1, h - 1)
+  const fx = x - x0
+  const fy = y - y0
+
+  const idx00 = (y0 * w + x0) * 4
+  const idx01 = (y0 * w + x1) * 4
+  const idx10 = (y1 * w + x0) * 4
+  const idx11 = (y1 * w + x1) * 4
+
+  for (let c = 0; c < 4; c++) {
+    const v00 = pixels[idx00 + c]
+    const v01 = pixels[idx01 + c]
+    const v10 = pixels[idx10 + c]
+    const v11 = pixels[idx11 + c]
+    out[offset + c] = Math.round(v00 * (1 - fx) * (1 - fy) + v01 * fx * (1 - fy) + v10 * (1 - fx) * fy + v11 * fx * fy)
+  }
+}
+
 interface PhotoCaptureProps {
   onClose: () => void
 }
@@ -78,6 +169,13 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
       const dataUrl = reader.result as string
       const img = new Image()
       img.onload = () => {
+        const canvas = captureCanvasRef.current
+        if (canvas) {
+          canvas.width = img.naturalWidth
+          canvas.height = img.naturalHeight
+          const ctx = canvas.getContext('2d')
+          if (ctx) ctx.drawImage(img, 0, 0)
+        }
         setPhoto(dataUrl)
         setCorners([
           { x: 0.05, y: 0.05 },
@@ -138,21 +236,38 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
     dstCanvas.width = destW
     dstCanvas.height = destH
 
-    const ctx = dstCanvas.getContext('2d')
-    if (!ctx) return
+    const srcCtx = srcCanvas.getContext('2d')
+    const dstCtx = dstCanvas.getContext('2d')
+    if (!srcCtx || !dstCtx) return
 
     const srcW = srcCanvas.width
     const srcH = srcCanvas.height
 
-    const src = corners.map((c) => ({
+    const srcCorners = corners.map((c) => ({
       x: c.x * srcW,
       y: c.y * srcH,
     }))
-    const minX = Math.max(0, Math.min(...src.map(p => p.x)))
-    const minY = Math.max(0, Math.min(...src.map(p => p.y)))
-    const maxX = Math.min(srcW, Math.max(...src.map(p => p.x)))
-    const maxY = Math.min(srcH, Math.max(...src.map(p => p.y)))
-    ctx.drawImage(srcCanvas, minX, minY, maxX - minX, maxY - minY, 0, 0, destW, destH)
+
+    const dstCorners = [
+      { x: 0, y: 0 },
+      { x: destW, y: 0 },
+      { x: destW, y: destH },
+      { x: 0, y: destH },
+    ]
+
+    const H = computeHomography(dstCorners, srcCorners)
+
+    const srcData = srcCtx.getImageData(0, 0, srcW, srcH)
+    const dstData = dstCtx.createImageData(destW, destH)
+
+    for (let oy = 0; oy < destH; oy++) {
+      for (let ox = 0; ox < destW; ox++) {
+        const sp = applyHomography(H, ox, oy)
+        sampleBilinear(srcData.data, srcW, srcH, sp.x, sp.y, dstData.data, (oy * destW + ox) * 4)
+      }
+    }
+
+    dstCtx.putImageData(dstData, 0, 0)
 
     const result = dstCanvas.toDataURL('image/jpeg', 0.85)
     setBackgroundImage(result)

@@ -42,6 +42,10 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null)
   const [unitMenuPos, setUnitMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [placementCursorPos, setPlacementCursorPos] = useState<{ screenX: number; screenY: number; tableX: number; tableY: number } | null>(null)
+  const [moveTerrainId, setMoveTerrainId] = useState<string | null>(null)
+  const [moveVertices, setMoveVertices] = useState<{ x: number; y: number }[]>([])
+  const [editTerrainId, setEditTerrainId] = useState<string | null>(null)
+  const [editVertices, setEditVertices] = useState<{ x: number; y: number }[]>([])
   const draggingVertex = useRef<number | null>(null)
   const editingTerrainRef = useRef(editingTerrain)
   const placementModeRef = useRef(placementMode)
@@ -53,6 +57,9 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const backgroundGenRef = useRef(0)
   const handleDragRef = useRef<(sx: number, sy: number) => void>(() => {})
+  const moveDragStart = useRef<{ tableX: number; tableY: number } | null>(null)
+  const moveOrigVerts = useRef<{ x: number; y: number }[]>([])
+  const editDragIdx = useRef<number | null>(null)
   const renderBackgroundRef = useRef<() => void>(() => {})
   const renderGridRef = useRef<() => void>(() => {})
   const renderTerrainRef = useRef<() => void>(() => {})
@@ -155,19 +162,63 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
 
     for (const t of currentGame.terrain) {
       if (t.vertices.length < 3) continue
-      const sv = t.vertices.map((v) => tableToScreen(v.x, v.y, w, h))
+
+      let vertices = t.vertices
+      if (t.id === moveTerrainId && moveVertices.length > 0) {
+        vertices = moveVertices
+      } else if (t.id === editTerrainId && editVertices.length > 0) {
+        vertices = editVertices
+      }
+
+      const sv = vertices.map((v) => tableToScreen(v.x, v.y, w, h))
       const c = TERRAIN_COLORS[t.type]
       const g = new Graphics()
       const isSelected = t.id === selectedTerrainId
+      const isMoveOrEdit = t.id === moveTerrainId || t.id === editTerrainId
       g.poly(sv.flatMap((v) => [v.x, v.y]))
       g.fill({ color: parseInt(c.fill.slice(1), 16), alpha: TERRAIN_FILL_ALPHA })
-      g.stroke({ color: isSelected ? 0xffffff : parseInt(c.border.slice(1), 16), width: isSelected ? 3 : TERRAIN_BORDER_WIDTH, alpha: 0.9 })
+      g.stroke({ color: isSelected || isMoveOrEdit ? 0xffffff : parseInt(c.border.slice(1), 16), width: isSelected || isMoveOrEdit ? 3 : TERRAIN_BORDER_WIDTH, alpha: 0.9 })
       g.eventMode = 'static'
-      g.cursor = 'pointer'
+      g.cursor = isMoveOrEdit ? 'grab' : 'pointer'
       const terrainId = t.id
       g.on('pointerdown', (e) => {
         if (editingTerrainRef.current || placementModeRef.current) return
         e.stopPropagation()
+
+        if (t.id === moveTerrainId) {
+          const pos = screenToTableRef.current(e.global.x, e.global.y, w, h)
+          moveDragStart.current = { tableX: pos.x, tableY: pos.y }
+          moveOrigVerts.current = [...moveVertices]
+          const onMove = (ev: PointerEvent) => handleMoveDragRef.current(ev.clientX, ev.clientY)
+          const onUp = (ev: PointerEvent) => {
+            if (moveDragStart.current && moveTerrainId && currentGame) {
+              const rect = containerRef.current!.getBoundingClientRect()
+              const { w: cw, h: ch } = sizeRef.current
+              if (cw && ch) {
+                const finalPos = screenToTableRef.current(ev.clientX - rect.left, ev.clientY - rect.top, cw, ch)
+                const dx = Math.round(finalPos.x - moveDragStart.current.tableX)
+                const dy = Math.round(finalPos.y - moveDragStart.current.tableY)
+                updateTerrain(moveTerrainId, {
+                  vertices: moveOrigVerts.current.map((v) => ({
+                    x: Math.max(0, Math.min(currentGame.tableWidth, v.x + dx)),
+                    y: Math.max(0, Math.min(currentGame.tableHeight, v.y + dy)),
+                  }))
+                })
+              }
+            }
+            moveDragStart.current = null
+            setMoveTerrainId(null)
+            setMoveVertices([])
+            window.removeEventListener('pointermove', onMove)
+            window.removeEventListener('pointerup', onUp)
+          }
+          window.addEventListener('pointermove', onMove)
+          window.addEventListener('pointerup', onUp)
+          return
+        }
+
+        if (t.id === editTerrainId) return
+
         setSelectedTerrainId(terrainId)
         setMenuPos({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })
         setSelectedUnitId(null)
@@ -175,7 +226,33 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
       })
       tc.addChild(g)
     }
-  }, [currentGame, tableToScreen, selectedTerrainId])
+
+    if (editTerrainId && editVertices.length > 0) {
+      const sv = editVertices.map((v) => tableToScreen(v.x, v.y, w, h))
+      sv.forEach((v, i) => {
+        const dot = new Graphics()
+        dot.circle(v.x, v.y, VERTEX_RADIUS)
+        dot.fill({ color: VERTEX_COLOR })
+        dot.stroke({ color: 0xffffff, width: 2, alpha: 0.8 })
+        dot.eventMode = 'static'
+        dot.cursor = 'grab'
+        const idx = i
+        dot.on('pointerdown', (e) => {
+          e.stopPropagation()
+          editDragIdx.current = idx
+          const onMove = (ev: PointerEvent) => handleEditDragRef.current(ev.clientX, ev.clientY)
+          const onUp = () => {
+            editDragIdx.current = null
+            window.removeEventListener('pointermove', onMove)
+            window.removeEventListener('pointerup', onUp)
+          }
+          window.addEventListener('pointermove', onMove)
+          window.addEventListener('pointerup', onUp)
+        })
+        tc.addChild(dot)
+      })
+    }
+  }, [currentGame, tableToScreen, selectedTerrainId, moveTerrainId, moveVertices, editTerrainId, editVertices, updateTerrain])
 
   const renderEditingState = useCallback(() => {
     const ec = editContainerRef.current
@@ -426,6 +503,50 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
     [currentGame, screenToTable]
   )
 
+  const handleMoveDrag = useCallback(
+    (clientX: number, clientY: number) => {
+      if (!moveDragStart.current || !moveTerrainId || !currentGame) return
+      const el = containerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const { w, h } = sizeRef.current
+      if (!w || !h) return
+      const pos = screenToTableRef.current(clientX - rect.left, clientY - rect.top, w, h)
+      const dx = Math.round(pos.x - moveDragStart.current.tableX)
+      const dy = Math.round(pos.y - moveDragStart.current.tableY)
+      setMoveVertices(
+        moveOrigVerts.current.map((v) => ({
+          x: Math.max(0, Math.min(currentGame.tableWidth, v.x + dx)),
+          y: Math.max(0, Math.min(currentGame.tableHeight, v.y + dy)),
+        }))
+      )
+    },
+    [currentGame, moveTerrainId]
+  )
+
+  const handleEditDrag = useCallback(
+    (clientX: number, clientY: number) => {
+      if (editDragIdx.current === null || !editTerrainId || !currentGame) return
+      const el = containerRef.current
+      if (!el) return
+      const rect = el.getBoundingClientRect()
+      const { w, h } = sizeRef.current
+      if (!w || !h) return
+      const pos = screenToTableRef.current(clientX - rect.left, clientY - rect.top, w, h)
+      if (pos.x < 0 || pos.x > currentGame.tableWidth || pos.y < 0 || pos.y > currentGame.tableHeight) return
+      setEditVertices((prev) => {
+        const next = [...prev]
+        next[editDragIdx.current!] = { x: Math.round(pos.x), y: Math.round(pos.y) }
+        return next
+      })
+    },
+    [currentGame, editTerrainId]
+  )
+
+  const handleMoveDragRef = useRef(handleMoveDrag)
+  useEffect(() => { handleMoveDragRef.current = handleMoveDrag }, [handleMoveDrag])
+  const handleEditDragRef = useRef(handleEditDrag)
+  useEffect(() => { handleEditDragRef.current = handleEditDrag }, [handleEditDrag])
   useEffect(() => { handleDragRef.current = handleDrag }, [handleDrag])
   useEffect(() => { renderBackgroundRef.current = renderBackground }, [renderBackground])
   useEffect(() => { renderGridRef.current = renderGrid }, [renderGrid])
@@ -496,11 +617,15 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
           }
           return
         }
-        if (!editingTerrainRef.current) {
+        if (!editingTerrainRef.current && !moveDragStart.current && editDragIdx.current === null) {
           setSelectedTerrainId(null)
           setMenuPos(null)
           setSelectedUnitId(null)
           setUnitMenuPos(null)
+          setMoveTerrainId(null)
+          setMoveVertices([])
+          setEditTerrainId(null)
+          setEditVertices([])
         }
       })
       app.stage.addChildAt(hit, 0)
@@ -619,6 +744,50 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
           </button>
         </div>
       )}
+      {moveTerrainId && !editingTerrain && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded-lg px-4 py-2.5 backdrop-blur-sm flex gap-2 items-center">
+          <span className="text-xs text-gray-400">Drag the terrain to move it</span>
+          <button
+            onClick={() => {
+              setMoveTerrainId(null)
+              setMoveVertices([])
+              setSelectedTerrainId(null)
+              setMenuPos(null)
+            }}
+            className="text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1 transition-colors cursor-pointer"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+      {editTerrainId && !editingTerrain && (
+        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded-lg px-4 py-2.5 backdrop-blur-sm flex gap-2 items-center">
+          <span className="text-xs text-gray-400">Drag vertices to edit the polygon</span>
+          <button
+            onClick={() => {
+              updateTerrain(editTerrainId, { vertices: editVertices })
+              setEditTerrainId(null)
+              setEditVertices([])
+              setSelectedTerrainId(null)
+              setMenuPos(null)
+            }}
+            className="text-xs text-green-400 hover:text-green-300 border border-green-800 rounded px-2 py-1 transition-colors cursor-pointer"
+          >
+            Done
+          </button>
+          <button
+            onClick={() => {
+              setEditTerrainId(null)
+              setEditVertices([])
+              setSelectedTerrainId(null)
+              setMenuPos(null)
+            }}
+            className="text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1 transition-colors cursor-pointer"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
       {selectedTerrain && menuPos && (
         <div
           className="fixed z-50 bg-gray-900 border border-gray-700 rounded-xl p-3 shadow-xl w-44"
@@ -639,13 +808,35 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
               ))}
             </select>
           </div>
+          <div className="flex gap-2 mt-3">
+            <button
+              onClick={() => {
+                setMoveTerrainId(selectedTerrain.id)
+                setMoveVertices([...selectedTerrain.vertices])
+                setMenuPos(null)
+              }}
+              className="flex-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+            >
+              Move
+            </button>
+            <button
+              onClick={() => {
+                setEditTerrainId(selectedTerrain.id)
+                setEditVertices([...selectedTerrain.vertices])
+                setMenuPos(null)
+              }}
+              className="flex-1 text-xs text-green-400 hover:text-green-300 border border-green-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+            >
+              Edit
+            </button>
+          </div>
           <button
             onClick={() => {
               removeTerrain(selectedTerrain.id)
               setSelectedTerrainId(null)
               setMenuPos(null)
             }}
-            className="mt-3 w-full text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+            className="mt-2 w-full text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
           >
             Delete
           </button>
