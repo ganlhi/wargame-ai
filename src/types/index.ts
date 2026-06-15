@@ -74,6 +74,7 @@ export interface Unit {
   aiStyle: AIStyle
   maxTurnPoints: number
   speedProfile: Record<Attitude, SpeedRange>
+  driftSpeed: number
   firingArcs: FiringArc[]
   attitude: Attitude
   isInIrons: boolean

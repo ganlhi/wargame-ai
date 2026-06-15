@@ -3,7 +3,7 @@ import { v4 as uuid } from 'uuid'
 import { useGameStore } from '../stores/gameStore'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
 import { ARC_SIDES, arcSideLabel } from '../types'
-import type { Unit, UnitSide, AIStyle, UnitStatus, ArcSide } from '../types'
+import type { Unit, UnitSide, AIStyle, UnitStatus, ArcSide, Attitude, SpeedRange } from '../types'
 
 function OrientationSlider({
   initial,
@@ -80,6 +80,15 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
     }
     return result
   })
+  const defaultProfile: Record<Attitude, SpeedRange> = {
+    in_irons: { min: 0, max: 0 },
+    beating: { min: 20, max: 60 },
+    reaching: { min: 40, max: 100 },
+    quarter_reaching: { min: 60, max: 120 },
+    running: { min: 50, max: 110 },
+  }
+  const [driftSpeed, setDriftSpeed] = useState(unit?.driftSpeed ?? 10)
+  const [speedProfile, setSpeedProfile] = useState<Record<Attitude, SpeedRange>>(unit?.speedProfile ?? defaultProfile)
 
   const computedAttitude = computeAttitude(windDirection, orientation)
 
@@ -95,13 +104,8 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       status,
       aiStyle: side === 'ai' ? aiStyle : 'cautious',
       maxTurnPoints,
-      speedProfile: unit?.speedProfile ?? {
-        in_irons: { min: 0, max: 0 },
-        beating: { min: 20, max: 60 },
-        reaching: { min: 40, max: 100 },
-        quarter_reaching: { min: 60, max: 120 },
-        running: { min: 50, max: 110 },
-      },
+      speedProfile,
+      driftSpeed,
       firingArcs: (Object.entries(arcRanges) as [ArcSide, number][])
         .filter(([, r]) => r > 0)
         .map(([side, maxRange]) => ({
@@ -219,6 +223,55 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
               max={32}
               value={maxTurnPoints}
               onChange={(e) => setMaxTurnPoints(Number(e.target.value))}
+              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            />
+          </div>
+
+          <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
+            <div className="text-xs text-gray-400 font-medium mb-2">Speed per Attitude (mm/turn)</div>
+            <div className="space-y-1.5">
+              {(Object.keys(defaultProfile) as Attitude[]).map((att) => (
+                <div key={att} className="grid grid-cols-5 gap-1 items-center">
+                  <span className="text-xs text-gray-300 col-span-2">{ATTITUDE_LABELS[att]}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={speedProfile[att].min}
+                    onChange={(e) =>
+                      setSpeedProfile((prev) => ({
+                        ...prev,
+                        [att]: { ...prev[att], min: Math.max(0, Number(e.target.value)) },
+                      }))
+                    }
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    placeholder="Min"
+                  />
+                  <input
+                    type="number"
+                    min={0}
+                    value={speedProfile[att].max}
+                    onChange={(e) =>
+                      setSpeedProfile((prev) => ({
+                        ...prev,
+                        [att]: { ...prev[att], max: Math.max(0, Number(e.target.value)) },
+                      }))
+                    }
+                    className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    placeholder="Max"
+                  />
+                  <span className="text-xs text-gray-500">mm</span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Drift Speed (mm/chunk, when in irons)</label>
+            <input
+              type="number"
+              min={0}
+              value={driftSpeed}
+              onChange={(e) => setDriftSpeed(Math.max(0, Number(e.target.value)))}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
