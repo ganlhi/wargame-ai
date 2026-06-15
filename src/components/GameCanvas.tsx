@@ -425,7 +425,48 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
     g.stroke({ color: 0x60a5fa, width: 2, alpha: 0.85 })
 
     oc.addChild(g)
-  }, [currentGame])
+
+    if (currentGame.currentPhase === 'reveal') {
+      for (const u of currentGame.units) {
+        if (u.side !== 'ai' || !u.hiddenAIOrder || (u.status !== 'active' && u.status !== 'immobilised')) continue
+        const startPos = tableToScreen(u.position.x, u.position.y, w, h)
+        let ox = u.orientation
+        let px = u.position.x
+        let py = u.position.y
+
+        const pathG = new Graphics()
+        pathG.moveTo(startPos.x, startPos.y)
+
+        for (const chunk of u.hiddenAIOrder.chunks) {
+          if (u.isInIrons) {
+            const driftDir = (currentGame.windDirection + 8) % 32
+            const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+            px += Math.cos(driftAngle) * (u.driftSpeed ?? 10)
+            py += Math.sin(driftAngle) * (u.driftSpeed ?? 10)
+          } else {
+            const vecAngle = (ox * Math.PI / 16) - Math.PI / 2
+            px += Math.cos(vecAngle) * chunk.distance
+            py += Math.sin(vecAngle) * chunk.distance
+          }
+          const sp = tableToScreen(px, py, w, h)
+          pathG.lineTo(sp.x, sp.y)
+
+          if (chunk.turn) {
+            ox = (ox + (chunk.turn.direction === 'starboard' ? chunk.turn.points : -chunk.turn.points) + 32) % 32
+          }
+        }
+
+        pathG.stroke({ color: 0xfbbf24, width: 2, alpha: 0.6 })
+        oc.addChild(pathG)
+
+        const endPos = tableToScreen(px, py, w, h)
+        const dot = new Graphics()
+        dot.circle(endPos.x, endPos.y, 4)
+        dot.fill({ color: 0xfbbf24, alpha: 0.8 })
+        oc.addChild(dot)
+      }
+    }
+  }, [currentGame, tableToScreen])
 
   const renderBackground = useCallback(() => {
     const bc = bgContainerRef.current

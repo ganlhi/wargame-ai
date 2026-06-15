@@ -64,6 +64,13 @@ export interface SpeedRange {
   max: number
 }
 
+export interface ActionLogEntry {
+  turn: number
+  unitId?: string
+  unitName?: string
+  text: string
+}
+
 export interface Unit {
   id: string
   name: string
@@ -78,6 +85,8 @@ export interface Unit {
   firingArcs: FiringArc[]
   attitude: Attitude
   isInIrons: boolean
+  prevAttitude: Attitude
+  hiddenAIOrder: MovementPlan | null
 }
 
 export interface MoveChunk {
@@ -106,5 +115,6 @@ export interface GameState {
   units: Unit[]
   currentTurn: number
   currentPhase: GamePhase
+  actionLog: ActionLogEntry[]
   backgroundImage?: string
 }

@@ -1,7 +1,10 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { v4 as uuid } from 'uuid'
-import type { SavedGame, GameState, TableTerrain, Unit, GamePhase } from '../types'
+import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry } from '../types'
+import { applyMovementPlan } from '../game/movement'
+import { suggestMovement } from '../game/ai'
+import { computeAttitude } from '../utils/attitude'
 
 interface GameStore {
   savedGames: SavedGame[]
@@ -30,6 +33,10 @@ interface GameStore {
   addUnit: (unit: Unit) => void
   updateUnit: (id: string, updates: Partial<Unit>) => void
   removeUnit: (id: string) => void
+  addLogEntry: (entry: ActionLogEntry) => void
+  startGame: () => void
+  revealOrders: () => void
+  resolveTurn: () => void
 }
 
 const now = () => new Date().toISOString()
@@ -49,6 +56,7 @@ function createInitialGame(name: string, defaultWidth: number, defaultHeight: nu
     units: [],
     currentTurn: 1,
     currentPhase: 'setup',
+    actionLog: [],
   }
 }
 
@@ -90,12 +98,16 @@ export const useGameStore = create<GameStore>()(
             terrain: raw.terrain ?? [],
             units: (raw.units ?? []).map((u: Record<string, unknown>) => ({
               ...u,
+              prevAttitude: u.prevAttitude ?? 'reaching',
+              hiddenAIOrder: u.hiddenAIOrder ?? null,
+              driftSpeed: u.driftSpeed ?? 10,
               firingArcs: ((u.firingArcs ?? []) as Record<string, unknown>[]).map((a) =>
                 a.side ? a : { id: String(a.id ?? ''), side: 'starboard' as const, maxRange: Number(a.maxRange ?? 300) }
               ),
             })),
             currentTurn: raw.currentTurn ?? 1,
             currentPhase: raw.currentPhase ?? 'setup',
+            actionLog: raw.actionLog ?? [],
             backgroundImage: raw.backgroundImage,
           }
           set({ currentGame: game, hasUnsavedChanges: false })
@@ -273,6 +285,134 @@ export const useGameStore = create<GameStore>()(
           },
           hasUnsavedChanges: true,
         })
+      },
+
+      addLogEntry: (entry) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            actionLog: [...game.actionLog, entry],
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      startGame: () => {
+        const game = get().currentGame
+        if (!game) return
+        const units = game.units.map((u) => {
+          const attitude = computeAttitude(game.windDirection, u.orientation)
+          return { ...u, attitude, prevAttitude: attitude }
+        })
+        set({
+          currentGame: {
+            ...game,
+            units,
+            currentTurn: 1,
+            currentPhase: 'orders',
+            actionLog: [{ turn: 0, text: 'Game started' }],
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+        const updated = get().currentGame
+        if (updated) {
+          for (const u of updated.units) {
+            if (u.side === 'ai') {
+              const order = suggestMovement(
+                u,
+                updated.units,
+                updated.terrain,
+                updated.windDirection,
+                updated.tableWidth,
+                updated.tableHeight,
+                u.prevAttitude,
+                1,
+              )
+              get().updateUnit(u.id, { hiddenAIOrder: order })
+            }
+          }
+        }
+      },
+
+      revealOrders: () => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            currentPhase: 'reveal',
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      resolveTurn: () => {
+        const game = get().currentGame
+        if (!game || game.currentPhase !== 'reveal') return
+
+        let units = [...game.units]
+
+        for (let i = 0; i < units.length; i++) {
+          const u = units[i]
+          if (!u.hiddenAIOrder) continue
+
+          const result = applyMovementPlan(u, u.hiddenAIOrder, game.windDirection, game.tableWidth, game.tableHeight)
+          const drift = result.isInIrons ? ` (drifted ${u.driftSpeed}mm per chunk)` : ''
+          const boundary = result.hitBoundary ? ' [hit table edge]' : ''
+          const sideTag = u.side === 'ai' ? '' : ' (player)'
+          get().addLogEntry({
+            turn: game.currentTurn,
+            unitId: u.id,
+            unitName: u.name,
+            text: `${u.name} moved to (${Math.round(result.position.x)}, ${Math.round(result.position.y)}) heading ${result.orientation}pts${drift}${boundary}${sideTag}`,
+          })
+          units[i] = {
+            ...u,
+            position: result.position,
+            orientation: result.orientation,
+            attitude: result.attitude,
+            prevAttitude: u.attitude,
+            isInIrons: result.isInIrons,
+            hiddenAIOrder: null,
+          }
+        }
+
+        const nextTurn = game.currentTurn + 1
+
+        set({
+          currentGame: {
+            ...game,
+            units,
+            currentTurn: nextTurn,
+            currentPhase: 'orders',
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+
+        const updated = get().currentGame
+        if (updated) {
+          for (const u of updated.units) {
+            if (u.side === 'ai') {
+              const order = suggestMovement(
+                u,
+                updated.units,
+                updated.terrain,
+                updated.windDirection,
+                updated.tableWidth,
+                updated.tableHeight,
+                u.prevAttitude,
+                1,
+              )
+              get().updateUnit(u.id, { hiddenAIOrder: order })
+            }
+          }
+        }
       },
     }),
     {

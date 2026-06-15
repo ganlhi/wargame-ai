@@ -114,6 +114,8 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
           maxRange,
         })),
       attitude: computedAttitude,
+      prevAttitude: computedAttitude,
+      hiddenAIOrder: null,
       isInIrons: false,
     })
   }

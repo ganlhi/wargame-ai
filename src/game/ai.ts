@@ -4,7 +4,9 @@ import { enumerateMovementPlans, applyMovementPlan } from './movement'
 
 const GRAPPLE_RANGE = 20
 const EDGE_DANGER = 100
-const TERRAIN_DANGER = 50
+const EDGE_PENALTY_MULT = 1
+const TERRAIN_DANGER = 30
+const TERRAIN_PENALTY_MULT = 0.5
 
 const ATTITUDE_ORDER: Record<Attitude, number> = {
   quarter_reaching: 5,
@@ -110,13 +112,60 @@ function isEnemyBroadsideOnUnit(unit: Unit, enemy: Unit): boolean {
          inArc(enemyRel, starboardArc.minAngle, starboardArc.maxAngle)
 }
 
-function scoreAttitude(attitude: Attitude): number {
-  return (ATTITUDE_ORDER[attitude] - 1) * 25
+function pointToSegmentDist(
+  p: { x: number; y: number },
+  a: { x: number; y: number },
+  b: { x: number; y: number },
+): number {
+  const abx = b.x - a.x
+  const aby = b.y - a.y
+  const len2 = abx * abx + aby * aby
+  if (len2 === 0) return distance(p, a)
+  let t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2
+  t = Math.max(0, Math.min(1, t))
+  const cx = a.x + t * abx
+  const cy = a.y + t * aby
+  return distance(p, { x: cx, y: cy })
+}
+
+function pointInTerrain(p: { x: number; y: number }, terrain: TableTerrain[]): boolean {
+  for (const t of terrain) {
+    const v = t.vertices
+    if (v.length < 3) continue
+    let inside = false
+    for (let i = 0, j = v.length - 1; i < v.length; j = i++) {
+      const xi = v[i].x, yi = v[i].y
+      const xj = v[j].x, yj = v[j].y
+      if ((yi > p.y) !== (yj > p.y) && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi) {
+        inside = !inside
+      }
+    }
+    if (inside) return true
+  }
+  return false
+}
+
+function minEdgeDistance(pos: { x: number; y: number }, terrain: TableTerrain[]): number {
+  let minDist = Infinity
+  for (const t of terrain) {
+    const v = t.vertices
+    if (v.length < 3) continue
+    for (let i = 0; i < v.length; i++) {
+      const j = (i + 1) % v.length
+      const d = pointToSegmentDist(pos, v[i], v[j])
+      if (d < minDist) minDist = d
+    }
+  }
+  return minDist
+}
+
+function scoreAttitude(_attitude: Attitude): number {
+  return 0
 }
 
 function scoreFiring(unit: Unit, enemies: Unit[]): number {
   const { broadsideCount, rakingCount } = getEnemiesInFiringArcs(unit, enemies)
-  return broadsideCount * 50 + rakingCount * 40
+  return broadsideCount * 10 + rakingCount * 8
 }
 
 function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
@@ -156,19 +205,30 @@ function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
 function scoreEdgeProximity(pos: { x: number; y: number }, tableW: number, tableH: number): number {
   const edgeDist = Math.min(pos.x, pos.y, tableW - pos.x, tableH - pos.y)
   if (edgeDist < EDGE_DANGER) {
-    return -(EDGE_DANGER - edgeDist) * 0.5
+    return -(EDGE_DANGER - edgeDist) * EDGE_PENALTY_MULT
   }
   return 0
 }
 
 function scoreTerrainProximity(pos: { x: number; y: number }, terrain: TableTerrain[]): number {
+  if (terrain.length === 0) return 0
+
+  if (pointInTerrain(pos, terrain)) {
+    return -(TERRAIN_DANGER + 30) * TERRAIN_PENALTY_MULT
+  }
+
   let penalty = 0
   for (const t of terrain) {
-    for (const v of t.vertices) {
-      const d = distance(pos, v)
-      if (d < TERRAIN_DANGER) {
-        penalty -= (TERRAIN_DANGER - d) * 0.3
-      }
+    const v = t.vertices
+    if (v.length < 3) continue
+    let minEdgeDist = Infinity
+    for (let i = 0; i < v.length; i++) {
+      const j = (i + 1) % v.length
+      const d = pointToSegmentDist(pos, v[i], v[j])
+      if (d < minEdgeDist) minEdgeDist = d
+    }
+    if (minEdgeDist < TERRAIN_DANGER) {
+      penalty -= (TERRAIN_DANGER - minEdgeDist) * TERRAIN_PENALTY_MULT
     }
   }
   return penalty
@@ -201,8 +261,8 @@ function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
         const dist = distance(unit.position, e.position)
         if (dist < GRAPPLE_RANGE) bonus += 40
         const result = isTargetInAnyArc(unit, h, e)
-        if (result.isRaking) bonus += 30
-        else if (result.isBroadside) bonus += 20
+        if (result.isRaking) bonus += 6
+        else if (result.isBroadside) bonus += 4
       }
       break
     }
@@ -323,10 +383,41 @@ export function suggestMovement(
 
   if (plans.length === 0) return null
 
+  const BOUNDARY_PENALTY = -500
+  const TERRAIN_RELIEF_BONUS = 0.3
+  const CLOSING_BONUS = 3
+
+  const currentTerrainDist = terrain.length > 0 ? minEdgeDistance(unit.position, terrain) : Infinity
+
   const planScores = plans.map((plan) => {
     const newState = applyMovementPlan(unit, plan, windDirection, tableWidth, tableHeight)
     const testUnit: Unit = { ...unit, ...newState, attitude: newState.attitude }
-    return evaluatePosition(testUnit, enemies, terrain, tableWidth, tableHeight)
+    let score = evaluatePosition(testUnit, enemies, terrain, tableWidth, tableHeight)
+    if (newState.hitBoundary) {
+      score += BOUNDARY_PENALTY
+    }
+    if (terrain.length > 0) {
+      const newDist = minEdgeDistance(newState.position, terrain)
+      if (newDist > currentTerrainDist) {
+        score += (newDist - currentTerrainDist) * TERRAIN_RELIEF_BONUS
+      }
+    }
+
+    const dx = newState.position.x - unit.position.x
+    const dy = newState.position.y - unit.position.y
+    const moveDist = Math.sqrt(dx * dx + dy * dy)
+    if (moveDist > 0 && enemies.length > 0) {
+      const nearestEnemy = enemies.reduce((a, b) =>
+        distance(newState.position, a.position) < distance(newState.position, b.position) ? a : b,
+      )
+      const toEnemyX = nearestEnemy.position.x - unit.position.x
+      const toEnemyY = nearestEnemy.position.y - unit.position.y
+      const toEnemyDist = Math.sqrt(toEnemyX * toEnemyX + toEnemyY * toEnemyY)
+      const dot = (dx * toEnemyX + dy * toEnemyY) / (moveDist * toEnemyDist)
+      score += dot * moveDist * CLOSING_BONUS
+    }
+
+    return score
   })
 
   return selectPlan(plans, planScores, difficulty)

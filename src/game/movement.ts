@@ -70,10 +70,13 @@ export function applyMovementPlan(
   orientation: number
   attitude: Attitude
   isInIrons: boolean
+  hitBoundary: boolean
+  path: { x: number; y: number }[]
 } {
   let { x, y } = unit.position
   let orientation = unit.orientation
   let isInIrons = unit.isInIrons
+  const path = [{ x, y }]
 
   for (const chunk of plan.chunks) {
     if (isInIrons) {
@@ -86,6 +89,8 @@ export function applyMovementPlan(
       x += vec.dx * chunk.distance
       y += vec.dy * chunk.distance
     }
+
+    path.push({ x, y })
 
     if (isInIrons) {
       const dir = getInIronsTurnDirection(orientation, windAngle)
@@ -104,8 +109,9 @@ export function applyMovementPlan(
     }
   }
 
-  x = Math.max(0, Math.min(tableWidth, x))
-  y = Math.max(0, Math.min(tableHeight, y))
+  const clampedX = Math.max(0, Math.min(tableWidth, x))
+  const clampedY = Math.max(0, Math.min(tableHeight, y))
+  const hitBoundary = clampedX !== x || clampedY !== y
 
   const attitude = computeAttitude(windAngle, orientation)
 
@@ -114,10 +120,12 @@ export function applyMovementPlan(
   }
 
   return {
-    position: { x: Math.round(x), y: Math.round(y) },
+    position: { x: Math.round(clampedX), y: Math.round(clampedY) },
     orientation: Math.round(orientation) % 32,
     attitude,
     isInIrons,
+    hitBoundary,
+    path: path.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
   }
 }
 
@@ -159,7 +167,7 @@ export function enumerateMovementPlans(
 
       const dirs: ('port' | 'starboard')[] = ['port', 'starboard']
 
-      const boundaries = [1, 2, 3, 4]
+      const boundaries = [0, 1, 2, 3, 4]
 
       for (const b of boundaries) {
         for (const d of dirs) {
@@ -201,6 +209,14 @@ export function enumerateMovementPlans(
     if (turn2 > 0) turns.push({ afterChunk: 3, direction: dir, points: turn2 })
     plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, range.max))
   }
+
+  for (let tp = 1; tp <= maxTurnPoints; tp++) {
+    for (const dir of (['port', 'starboard'] as const)) {
+      plans.push(buildPlan([0, 0, 0, 0, 0], [{ afterChunk: 0, direction: dir, points: tp }], tp, range.max))
+    }
+  }
+
+  plans.push(buildPlan([0, 0, 0, 0, 0], [], 0, range.max))
 
   return plans
 }

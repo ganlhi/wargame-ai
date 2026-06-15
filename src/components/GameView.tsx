@@ -8,13 +8,15 @@ import { COMPASS_LABELS } from '../utils/attitude'
 import type { Unit } from '../types'
 
 export function GameView() {
-  const { currentGame, hasUnsavedChanges, saveCurrentGame, exitToMenu, setPhase, addTerrain, addUnit, updateUnit } = useGameStore()
+  const { currentGame, hasUnsavedChanges, saveCurrentGame, exitToMenu, setPhase, addTerrain, addUnit, updateUnit, startGame, revealOrders, resolveTurn } = useGameStore()
   const [showExitDialog, setShowExitDialog] = useState(false)
   const [showPhotoCapture, setShowPhotoCapture] = useState(false)
   const [editingTerrain, setEditingTerrain] = useState(false)
   const [editingUnitId, setEditingUnitId] = useState<string | null>(null)
   const [placementActive, setPlacementActive] = useState(false)
   const [pendingPosition, setPendingPosition] = useState<{ x: number; y: number } | null>(null)
+  const [showActionLog, setShowActionLog] = useState(false)
+  const [expandedAIUnit, setExpandedAIUnit] = useState<string | null>(null)
   const hasContent = (currentGame?.terrain?.length ?? 0) > 0 || (currentGame?.units?.length ?? 0) > 0 || !!currentGame?.backgroundImage
   const [setupComplete, setSetupComplete] = useState(hasContent)
 
@@ -134,13 +136,13 @@ export function GameView() {
         <div className="flex-1">
           <h1 className="text-base font-semibold">{currentGame.name}</h1>
           <p className="text-xs text-gray-500">
-            Turn {currentGame.currentTurn} &middot; {currentGame.tableWidth}&times;{currentGame.tableHeight}mm &middot; Wind: {COMPASS_LABELS[currentGame.windDirection]}
+            {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}{currentGame.tableWidth}&times;{currentGame.tableHeight}mm · Wind: {COMPASS_LABELS[currentGame.windDirection]} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
           </p>
         </div>
         {hasUnsavedChanges && (
           <span className="text-xs text-yellow-500 bg-yellow-500/10 px-2 py-1 rounded">Unsaved</span>
         )}
-        {!editingTerrain && editingUnitId === null && !placementActive && (
+        {currentGame.currentPhase === 'setup' && !editingTerrain && editingUnitId === null && !placementActive && (
           <button
             onClick={() => setEditingTerrain(true)}
             className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
@@ -149,7 +151,7 @@ export function GameView() {
             + Terrain
           </button>
         )}
-        {!placementActive && editingUnitId === null && (
+        {currentGame.currentPhase === 'setup' && !placementActive && editingUnitId === null && (
           <button
             onClick={() => setPlacementActive(true)}
             className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
@@ -158,13 +160,48 @@ export function GameView() {
             + Unit
           </button>
         )}
-        <button
-          onClick={() => setShowPhotoCapture(true)}
-          className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
-          title="Capture table photo"
-        >
-          📷
-        </button>
+        {currentGame.currentPhase === 'setup' && (
+          <button
+            onClick={() => setShowPhotoCapture(true)}
+            className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
+            title="Capture table photo"
+          >
+            📷
+          </button>
+        )}
+        {currentGame.currentPhase === 'setup' && (
+          <button
+            onClick={startGame}
+            className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+          >
+            Start Game
+          </button>
+        )}
+        {currentGame.currentPhase === 'orders' && (
+          <button
+            onClick={revealOrders}
+            className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+          >
+            Reveal AI Orders
+          </button>
+        )}
+        {currentGame.currentPhase === 'reveal' && (
+          <button
+            onClick={resolveTurn}
+            className="bg-orange-600 hover:bg-orange-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+          >
+            Resolve Turn
+          </button>
+        )}
+        {currentGame.currentPhase !== 'setup' && (
+          <button
+            onClick={() => setShowActionLog(!showActionLog)}
+            className={`px-2 py-1 text-sm rounded transition-colors cursor-pointer ${showActionLog ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+            title="Action Log"
+          >
+            Log
+          </button>
+        )}
         <button onClick={saveCurrentGame} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">
           Save
         </button>
@@ -189,6 +226,71 @@ export function GameView() {
               >
                 Cancel
               </button>
+            </div>
+          </div>
+        )}
+
+        {currentGame.currentPhase === 'reveal' && currentGame.units.filter(u => u.side === 'ai' && u.status === 'active').length > 0 && (
+          <div className="absolute right-2 top-2 bottom-2 w-64 flex flex-col gap-2 pointer-events-none">
+            {currentGame.units.filter(u => u.side === 'ai' && u.status === 'active').map(aiUnit => (
+              <div
+                key={aiUnit.id}
+                className="bg-gray-900/90 border border-gray-700 rounded-lg p-3 pointer-events-auto backdrop-blur-sm cursor-pointer"
+                onClick={() => setExpandedAIUnit(expandedAIUnit === aiUnit.id ? null : aiUnit.id)}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-sm font-medium text-white">{aiUnit.name}</span>
+                  <span className={`text-xs px-1.5 py-0.5 rounded ${aiUnit.aiStyle === 'aggressive' ? 'bg-red-900/50 text-red-300' : aiUnit.aiStyle === 'cautious' ? 'bg-yellow-900/50 text-yellow-300' : 'bg-blue-900/50 text-blue-300'}`}>
+                    {aiUnit.aiStyle}
+                  </span>
+                </div>
+                {expandedAIUnit === aiUnit.id && aiUnit.hiddenAIOrder && (
+                  <div className="mt-2 text-xs text-gray-400 space-y-1">
+                    <p>Total turn pts: {aiUnit.hiddenAIOrder.totalTurnPoints}</p>
+                    <p>Effective max: {Math.round(aiUnit.hiddenAIOrder.effectiveMaxSpeed)}mm</p>
+                    <p className="text-gray-500">Chunks: {aiUnit.hiddenAIOrder.chunks.map((c, i) => (
+                      <span key={i}>
+                        {i > 0 && ' → '}
+                        {Math.round(c.distance)}mm{c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}
+                      </span>
+                    ))}</p>
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {showActionLog && currentGame.currentPhase !== 'setup' && (
+          <div className="absolute right-2 top-2 bottom-2 w-72 bg-gray-900/95 border border-gray-700 rounded-lg pointer-events-auto backdrop-blur-sm flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700">
+              <span className="text-sm font-medium text-white">Action Log</span>
+              <button
+                onClick={() => setShowActionLog(false)}
+                className="text-gray-400 hover:text-gray-200 text-xs cursor-pointer"
+              >
+                Close
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2 space-y-1">
+              {currentGame.actionLog.length === 0 && (
+                <p className="text-xs text-gray-500 text-center py-4">No actions yet</p>
+              )}
+              {[...currentGame.actionLog].reverse().map((entry, i) => (
+                <div key={i} className="text-xs border-l-2 border-gray-700 pl-2 py-1">
+                  {entry.turn > 0 && <span className="text-gray-600">T{entry.turn} </span>}
+                  <span className="text-gray-400">{entry.text}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        {currentGame.currentPhase === 'game_over' && (
+          <div className="absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none">
+            <div className="bg-gray-900 border border-gray-700 rounded-xl p-8 text-center pointer-events-auto">
+              <h2 className="text-2xl font-bold text-white mb-2">Game Over</h2>
+              <p className="text-gray-400">All units on one side have been defeated</p>
             </div>
           </div>
         )}
