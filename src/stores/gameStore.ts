@@ -88,7 +88,12 @@ export const useGameStore = create<GameStore>()(
             tableHeight: raw.tableHeight ?? raw.settings?.tableHeight ?? 900,
             windDirection: raw.windDirection ?? raw.settings?.windDirection ?? 0,
             terrain: raw.terrain ?? [],
-            units: raw.units ?? [],
+            units: (raw.units ?? []).map((u: Record<string, unknown>) => ({
+              ...u,
+              firingArcs: ((u.firingArcs ?? []) as Record<string, unknown>[]).map((a) =>
+                a.side ? a : { id: String(a.id ?? ''), side: 'starboard' as const, maxRange: Number(a.maxRange ?? 300) }
+              ),
+            })),
             currentTurn: raw.currentTurn ?? 1,
             currentPhase: raw.currentPhase ?? 'setup',
             backgroundImage: raw.backgroundImage,

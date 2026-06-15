@@ -18,8 +18,11 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
     { x: 0.05, y: 0.95 },
   ])
   const [dragCorner, setDragCorner] = useState<number | null>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
   const [imgSize, setImgSize] = useState({ w: 400, h: 300 })
   const setBackgroundImage = useGameStore((s) => s.setBackgroundImage)
+
+  const streamRef = useRef<MediaStream | null>(null)
 
   useEffect(() => {
     async function startCamera() {
@@ -27,6 +30,7 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
         const s = await navigator.mediaDevices.getUserMedia({
           video: { facingMode: 'environment', width: 1920, height: 1080 },
         })
+        streamRef.current = s
         setStream(s)
         if (videoRef.current) {
           videoRef.current.srcObject = s
@@ -37,9 +41,10 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
     }
     startCamera()
     return () => {
-      stream?.getTracks().forEach((t) => t.stop())
+      const s = streamRef.current
+      if (s) s.getTracks().forEach((t) => t.stop())
+      streamRef.current = null
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const capture = useCallback(() => {
@@ -53,15 +58,54 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
     ctx.drawImage(video, 0, 0)
     const dataUrl = canvas.toDataURL('image/jpeg', 0.8)
     setPhoto(dataUrl)
-    stream?.getTracks().forEach((t) => t.stop())
+    setCorners([
+      { x: 0.05, y: 0.05 },
+      { x: 0.95, y: 0.05 },
+      { x: 0.95, y: 0.95 },
+      { x: 0.05, y: 0.95 },
+    ])
+    const s = streamRef.current
+    if (s) s.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
     setStream(null)
-  }, [stream])
+  }, [])
+
+  const handleFileUpload = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = () => {
+      const dataUrl = reader.result as string
+      const img = new Image()
+      img.onload = () => {
+        setPhoto(dataUrl)
+        setCorners([
+          { x: 0.05, y: 0.05 },
+          { x: 0.95, y: 0.05 },
+          { x: 0.95, y: 0.95 },
+          { x: 0.05, y: 0.95 },
+        ])
+        const s = streamRef.current
+        if (s) s.getTracks().forEach((t) => t.stop())
+        streamRef.current = null
+        setStream(null)
+      }
+      img.src = dataUrl
+    }
+    reader.readAsDataURL(file)
+    if (fileInputRef.current) fileInputRef.current.value = ''
+  }, [])
 
   const retake = useCallback(() => {
+    const old = streamRef.current
+    if (old) old.getTracks().forEach((t) => t.stop())
+    streamRef.current = null
+    setStream(null)
     setPhoto(null)
     navigator.mediaDevices
       .getUserMedia({ video: { facingMode: 'environment', width: 1920, height: 1080 } })
       .then((s) => {
+        streamRef.current = s
         setStream(s)
         if (videoRef.current) videoRef.current.srcObject = s
       })
@@ -69,8 +113,15 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
   }, [])
 
   const imgRef = useCallback((img: HTMLImageElement | null) => {
-    if (img) {
-      setImgSize({ w: img.naturalWidth || 400, h: img.naturalHeight || 300 })
+    if (!img) return
+    if (img.naturalWidth) {
+      setImgSize({ w: img.naturalWidth, h: img.naturalHeight })
+    } else {
+      const onLoad = () => {
+        setImgSize({ w: img.naturalWidth, h: img.naturalHeight })
+        img.removeEventListener('load', onLoad)
+      }
+      img.addEventListener('load', onLoad)
     }
   }, [])
 
@@ -97,49 +148,11 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
       x: c.x * srcW,
       y: c.y * srcH,
     }))
-    const dst = [
-      { x: 0, y: 0 },
-      { x: destW, y: 0 },
-      { x: destW, y: destH },
-      { x: 0, y: destH },
-    ]
-
-    const H = computeHomography(src, dst)
-    if (!H) {
-      ctx.drawImage(srcCanvas, 0, 0, destW, destH)
-    } else {
-      const imgData = ctx.createImageData(destW, destH)
-      const { data } = imgData
-      const srcData = getImageData(srcCanvas)
-
-      for (let y = 0; y < destH; y++) {
-        for (let x = 0; x < destW; x++) {
-          const denominator = H[6] * x + H[7] * y + H[8]
-          const sx = (H[0] * x + H[1] * y + H[2]) / denominator
-          const sy = (H[3] * x + H[4] * y + H[5]) / denominator
-          const idx = (y * destW + x) * 4
-          if (sx >= 0 && sx < srcW - 1 && sy >= 0 && sy < srcH - 1) {
-            const ix = Math.floor(sx)
-            const iy = Math.floor(sy)
-            const fx = sx - ix
-            const fy = sy - iy
-            const si = (iy * srcW + ix) * 4
-            for (let c = 0; c < 4; c++) {
-              const p00 = srcData[si + c]
-              const p10 = srcData[si + 4 + c]
-              const p01 = srcData[si + srcW * 4 + c]
-              const p11 = srcData[si + srcW * 4 + 4 + c]
-              data[idx + c] =
-                (1 - fx) * (1 - fy) * p00 +
-                fx * (1 - fy) * p10 +
-                (1 - fx) * fy * p01 +
-                fx * fy * p11
-            }
-          }
-        }
-      }
-      ctx.putImageData(imgData, 0, 0)
-    }
+    const minX = Math.max(0, Math.min(...src.map(p => p.x)))
+    const minY = Math.max(0, Math.min(...src.map(p => p.y)))
+    const maxX = Math.min(srcW, Math.max(...src.map(p => p.x)))
+    const maxY = Math.min(srcH, Math.max(...src.map(p => p.y)))
+    ctx.drawImage(srcCanvas, minX, minY, maxX - minX, maxY - minY, 0, 0, destW, destH)
 
     const result = dstCanvas.toDataURL('image/jpeg', 0.85)
     setBackgroundImage(result)
@@ -153,18 +166,25 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
 
   const handlePointerMove = useCallback(
     (e: React.PointerEvent) => {
-      if (dragCorner === null) return
+      if (dragCorner === null || imgSize.w < 100) return
       const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
+      const divX = (e.clientX - rect.left) / rect.width
+      const divY = (e.clientY - rect.top) / rect.height
+      const scale = Math.min(rect.width / imgSize.w, rect.height / imgSize.h)
+      const ox = (rect.width - imgSize.w * scale) / 2
+      const oy = (rect.height - imgSize.h * scale) / 2
+      const imgX = ((divX * rect.width - ox) / scale) / imgSize.w
+      const imgY = ((divY * rect.height - oy) / scale) / imgSize.h
       setCorners((prev) => {
         const next = [...prev]
         next[dragCorner] = {
-          x: Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width)),
-          y: Math.max(0, Math.min(1, (e.clientY - rect.top) / rect.height)),
+          x: Math.max(0, Math.min(1, imgX)),
+          y: Math.max(0, Math.min(1, imgY)),
         }
         return next
       })
     },
-    [dragCorner]
+    [dragCorner, imgSize]
   )
 
   const handlePointerUp = useCallback(() => {
@@ -189,7 +209,7 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
                 className="w-full rounded-lg bg-gray-800"
                 style={{ maxHeight: 400, objectFit: 'contain' }}
               />
-              <div className="flex gap-2">
+              <div className="flex gap-2 flex-wrap">
                 <button
                   onClick={capture}
                   disabled={!stream}
@@ -197,6 +217,16 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
                 >
                   Capture Photo
                 </button>
+                <label className="bg-gray-700 hover:bg-gray-600 text-gray-200 px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer">
+                  Upload Image
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleFileUpload}
+                    className="hidden"
+                  />
+                </label>
               </div>
             </div>
           ) : (
@@ -217,6 +247,7 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
                   draggable={false}
                 />
                 <canvas ref={previewRef} className="hidden" />
+                {imgSize.w >= 100 && (
                 <svg
                   className="absolute inset-0 w-full h-full pointer-events-none"
                   viewBox={`0 0 ${imgSize.w} ${imgSize.h}`}
@@ -246,11 +277,11 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
                     />
                   ))}
                 </svg>
+                )}
               </div>
               <p className="text-xs text-gray-500 text-center">
                 Drag corners to align with table edges, then Apply.
               </p>
-              <canvas ref={captureCanvasRef} className="hidden" />
               <div className="flex gap-2">
                 <button onClick={retake} className="text-gray-400 hover:text-gray-200 px-3 py-2 text-sm transition-colors cursor-pointer">
                   Retake
@@ -264,64 +295,11 @@ export function PhotoCapture({ onClose }: PhotoCaptureProps) {
               </div>
             </div>
           )}
+          <canvas ref={captureCanvasRef} className="hidden" />
         </div>
       </div>
     </div>
   )
 }
 
-function getImageData(canvas: HTMLCanvasElement): Uint8ClampedArray {
-  const ctx = canvas.getContext('2d')
-  return ctx?.getImageData(0, 0, canvas.width, canvas.height).data ?? new Uint8ClampedArray()
-}
 
-function computeHomography(
-  src: { x: number; y: number }[],
-  dst: { x: number; y: number }[]
-): number[] | null {
-  const A: number[][] = []
-  const b: number[] = []
-  for (let i = 0; i < 4; i++) {
-    const { x: sx, y: sy } = src[i]
-    const { x: dx, y: dy } = dst[i]
-    A.push([sx, sy, 1, 0, 0, 0, -dx * sx, -dx * sy])
-    A.push([0, 0, 0, sx, sy, 1, -dy * sx, -dy * sy])
-    b.push(dx, dy)
-  }
-  const flat = A.flat()
-  const n = 8
-  const L = new Array(n * n).fill(0)
-  const R = new Array(n).fill(0)
-  for (let i = 0; i < A.length; i++) {
-    for (let j = 0; j < n; j++) {
-      for (let k = 0; k < n; k++) {
-        L[j * n + k] += flat[i * n + j] * flat[i * n + k]
-      }
-      R[j] += flat[i * n + j] * b[i]
-    }
-  }
-  for (let i = 0; i < n; i++) {
-    const maxRow = L.slice(i * n, i * n + n).reduce(
-      (m, v, idx) => (Math.abs(v) > Math.abs(m.val) ? { val: v, idx } : m),
-      { val: 0, idx: i }
-    ).idx
-    if (maxRow !== i) {
-      for (let k = 0; k < n; k++) [L[i * n + k], L[maxRow * n + k]] = [L[maxRow * n + k], L[i * n + k]]
-      ;[R[i], R[maxRow]] = [R[maxRow], R[i]]
-    }
-    const pivot = L[i * n + i]
-    if (Math.abs(pivot) < 1e-10) return null
-    for (let k = i + 1; k < n; k++) {
-      const factor = L[k * n + i] / pivot
-      for (let j = i; j < n; j++) L[k * n + j] -= factor * L[i * n + j]
-      R[k] -= factor * R[i]
-    }
-  }
-  const x = new Array(n).fill(0)
-  for (let i = n - 1; i >= 0; i--) {
-    let sum = R[i]
-    for (let j = i + 1; j < n; j++) sum -= L[i * n + j] * x[j]
-    x[i] = sum / L[i * n + i]
-  }
-  return [...x, 1]
-}

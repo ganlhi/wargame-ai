@@ -2,7 +2,8 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import { Application, Graphics, Container, Sprite, Texture } from 'pixi.js'
 import { useGameStore } from '../stores/gameStore'
 import { TERRAIN_COLORS } from './TerrainPanel'
-import type { TerrainType } from '../types'
+import type { TerrainType, UnitStatus } from '../types'
+import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
 
 const GRID_COLOR = 0xffffff
 const GRID_ALPHA = 0.06
@@ -20,9 +21,12 @@ interface GameCanvasProps {
   editingTerrain: boolean
   onFinishEdit: (vertices: { x: number; y: number }[]) => void
   onCancelEdit: () => void
+  onEditUnit?: (unitId: string) => void
+  placementMode?: boolean
+  onTableClick?: (tableX: number, tableY: number) => void
 }
 
-export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameCanvasProps) {
+export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditUnit, placementMode = false, onTableClick }: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
   const initialized = useRef(false)
@@ -30,24 +34,37 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
   const gridContainerRef = useRef<Container | null>(null)
   const terrainContainerRef = useRef<Container | null>(null)
   const editContainerRef = useRef<Container | null>(null)
+  const unitsContainerRef = useRef<Container | null>(null)
+  const overlayContainerRef = useRef<Container | null>(null)
   const [tempVertices, setTempVertices] = useState<{ x: number; y: number }[]>([])
   const [selectedTerrainId, setSelectedTerrainId] = useState<string | null>(null)
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
+  const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null)
+  const [unitMenuPos, setUnitMenuPos] = useState<{ x: number; y: number } | null>(null)
+  const [placementCursorPos, setPlacementCursorPos] = useState<{ screenX: number; screenY: number; tableX: number; tableY: number } | null>(null)
   const draggingVertex = useRef<number | null>(null)
   const editingTerrainRef = useRef(editingTerrain)
+  const placementModeRef = useRef(placementMode)
   const currentGame = useGameStore((s) => s.currentGame)
   const updateTerrain = useGameStore((s) => s.updateTerrain)
   const removeTerrain = useGameStore((s) => s.removeTerrain)
+  const removeUnit = useGameStore((s) => s.removeUnit)
   const sizeRef = useRef({ w: 0, h: 0 })
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
+  const backgroundGenRef = useRef(0)
   const handleDragRef = useRef<(sx: number, sy: number) => void>(() => {})
   const renderBackgroundRef = useRef<() => void>(() => {})
   const renderGridRef = useRef<() => void>(() => {})
   const renderTerrainRef = useRef<() => void>(() => {})
+  const renderUnitsRef = useRef<() => void>(() => {})
+  const renderOverlayRef = useRef<() => void>(() => {})
 
   useEffect(() => {
     editingTerrainRef.current = editingTerrain
   }, [editingTerrain])
+  useEffect(() => { placementModeRef.current = placementMode }, [placementMode])
+  const onTableClickRef = useRef(onTableClick)
+  useEffect(() => { onTableClickRef.current = onTableClick }, [onTableClick])
 
   const getSize = useCallback(() => {
     const el = containerRef.current
@@ -85,6 +102,28 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
   useEffect(() => {
     screenToTableRef.current = screenToTable
   }, [screenToTable])
+
+  useEffect(() => {
+    if (!placementMode) return
+    const el = containerRef.current
+    if (!el) return
+    const onMove = (e: PointerEvent) => {
+      if (!currentGame) return
+      const rect = el.getBoundingClientRect()
+      const sx = e.clientX - rect.left
+      const sy = e.clientY - rect.top
+      const { w, h } = sizeRef.current
+      if (!w || !h) return
+      const pos = screenToTable(sx, sy, w, h)
+      if (pos.x >= 0 && pos.x <= currentGame.tableWidth && pos.y >= 0 && pos.y <= currentGame.tableHeight) {
+        setPlacementCursorPos({ screenX: e.clientX, screenY: e.clientY, tableX: Math.round(pos.x), tableY: Math.round(pos.y) })
+      } else {
+        setPlacementCursorPos(null)
+      }
+    }
+    el.addEventListener('pointermove', onMove)
+    return () => el.removeEventListener('pointermove', onMove)
+  }, [placementMode, currentGame, screenToTable])
 
   const handleDrag = useCallback(
     (clientX: number, clientY: number) => {
@@ -127,10 +166,12 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
       g.cursor = 'pointer'
       const terrainId = t.id
       g.on('pointerdown', (e) => {
-        if (editingTerrainRef.current) return
+        if (editingTerrainRef.current || placementModeRef.current) return
         e.stopPropagation()
         setSelectedTerrainId(terrainId)
         setMenuPos({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })
+        setSelectedUnitId(null)
+        setUnitMenuPos(null)
       })
       tc.addChild(g)
     }
@@ -176,6 +217,139 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
     })
   }, [tempVertices, tableToScreen])
 
+  const getStatusColor = (status: UnitStatus): number | null => {
+    switch (status) {
+      case 'grappled': return 0xf59e0b
+      case 'immobilised': return 0xeab308
+      case 'destroyed': return 0x6b7280
+      case 'surrendered': return 0xffffff
+      default: return null
+    }
+  }
+
+  const renderUnits = useCallback(() => {
+    const uc = unitsContainerRef.current
+    if (!uc || !currentGame) return
+    uc.removeChildren()
+    const { w, h } = sizeRef.current
+    if (!w || !h) return
+
+    for (const u of currentGame.units) {
+      const pos = tableToScreen(u.position.x, u.position.y, w, h)
+      const container = new Container()
+      container.x = pos.x
+      container.y = pos.y
+      container.rotation = (u.orientation * Math.PI / 16) - Math.PI / 2
+
+      const isPlayer = u.side === 'player'
+      const isDisabled = u.status === 'destroyed' || u.status === 'surrendered'
+      const hullColor = isPlayer ? 0x3b82f6 : 0xef4444
+      const isSelected = u.id === selectedUnitId
+
+      const g = new Graphics()
+      g.moveTo(12, 0)
+      g.lineTo(8, -4)
+      g.lineTo(-2, -5)
+      g.lineTo(-8, -3)
+      g.lineTo(-10, 0)
+      g.lineTo(-8, 3)
+      g.lineTo(-2, 5)
+      g.lineTo(8, 4)
+      g.closePath()
+      g.fill({ color: isDisabled ? 0x6b7280 : hullColor, alpha: isDisabled ? 0.4 : 0.9 })
+      g.stroke({ color: isSelected ? 0xffffff : 0x94a3b8, width: isSelected ? 2 : 1, alpha: 0.8 })
+
+      const statusColor = getStatusColor(u.status)
+      if (statusColor !== null) {
+        const dot = new Graphics()
+        dot.circle(0, 7, 3)
+        dot.fill({ color: statusColor })
+        dot.stroke({ color: 0xffffff, width: 1, alpha: 0.6 })
+        container.addChild(dot)
+      }
+
+      g.eventMode = 'static'
+      g.cursor = 'pointer'
+      const unitId = u.id
+      g.on('pointerdown', (e) => {
+        if (editingTerrainRef.current || placementModeRef.current) return
+        e.stopPropagation()
+        setSelectedUnitId(unitId)
+        setUnitMenuPos({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })
+        setSelectedTerrainId(null)
+        setMenuPos(null)
+      })
+
+      container.addChild(g)
+      uc.addChild(container)
+    }
+  }, [currentGame, tableToScreen, selectedUnitId])
+
+  const renderOverlay = useCallback(() => {
+    const oc = overlayContainerRef.current
+    if (!oc || !currentGame) return
+    oc.removeChildren()
+    const { w, h } = sizeRef.current
+    if (!w || !h) return
+
+    const sx = (w - PADDING * 2) / currentGame.tableWidth
+    const sy = (h - PADDING * 2) / currentGame.tableHeight
+    const s = Math.min(sx, sy)
+    const ox = (w - currentGame.tableWidth * s) / 2
+    const oy = (h - currentGame.tableHeight * s) / 2
+
+    const compassR = 16
+    const cx = ox + currentGame.tableWidth * s - PADDING - compassR - 8
+    const cy = oy + PADDING + compassR + 8
+
+    const g = new Graphics()
+    g.circle(cx, cy, compassR)
+    g.stroke({ color: 0xffffff, width: 1, alpha: 0.25 })
+
+    const N = -Math.PI / 2
+    const S = Math.PI / 2
+    const E = 0
+    const W = Math.PI
+
+    g.moveTo(cx, cy)
+    g.lineTo(cx + compassR * Math.cos(N), cy + compassR * Math.sin(N))
+    g.stroke({ color: 0xef4444, width: 2, alpha: 0.9 })
+
+    g.moveTo(cx, cy)
+    g.lineTo(cx + compassR * Math.cos(S), cy + compassR * Math.sin(S))
+    g.stroke({ color: 0xffffff, width: 1, alpha: 0.25 })
+
+    g.moveTo(cx, cy)
+    g.lineTo(cx + compassR * Math.cos(E), cy + compassR * Math.sin(E))
+    g.stroke({ color: 0xffffff, width: 1, alpha: 0.25 })
+
+    g.moveTo(cx, cy)
+    g.lineTo(cx + compassR * Math.cos(W), cy + compassR * Math.sin(W))
+    g.stroke({ color: 0xffffff, width: 1, alpha: 0.25 })
+
+    const windAngle = (currentGame.windDirection + 8) * Math.PI / 16
+    const arrowLen = 20
+    const arrowOffset = compassR + 4
+    const ax = cx + Math.cos(windAngle) * arrowOffset
+    const ay = cy + Math.sin(windAngle) * arrowOffset
+    const tipX = ax + Math.cos(windAngle) * arrowLen
+    const tipY = ay + Math.sin(windAngle) * arrowLen
+
+    g.moveTo(ax, ay)
+    g.lineTo(tipX, tipY)
+    g.stroke({ color: 0x60a5fa, width: 2.5, alpha: 0.85 })
+
+    const headLen = 7
+    const headSpread = Math.PI / 6
+    g.moveTo(tipX, tipY)
+    g.lineTo(tipX - Math.cos(windAngle - headSpread) * headLen, tipY - Math.sin(windAngle - headSpread) * headLen)
+    g.moveTo(tipX, tipY)
+    g.lineTo(tipX - Math.cos(windAngle + headSpread) * headLen, tipY - Math.sin(windAngle + headSpread) * headLen)
+    g.stroke({ color: 0x60a5fa, width: 2, alpha: 0.85 })
+
+    oc.addChild(g)
+  }, [currentGame])
+
   const renderBackground = useCallback(() => {
     const bc = bgContainerRef.current
     if (!bc || !currentGame) return
@@ -189,19 +363,28 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
     const oy = (h - currentGame.tableHeight * s) / 2
 
     if (currentGame.backgroundImage) {
-      const texture = Texture.from(currentGame.backgroundImage)
-      const sprite = new Sprite(texture)
-      sprite.x = ox
-      sprite.y = oy
-      sprite.width = currentGame.tableWidth * s
-      sprite.height = currentGame.tableHeight * s
-      bc.addChild(sprite)
+      const gen = ++backgroundGenRef.current
+      const img = new window.Image()
+      img.onload = () => {
+        if (backgroundGenRef.current !== gen) return
+        const texture = Texture.from(img)
+        const sprite = new Sprite(texture)
+        sprite.x = ox
+        sprite.y = oy
+        sprite.width = currentGame.tableWidth * s
+        sprite.height = currentGame.tableHeight * s
+        sprite.alpha = 0.6
+        bc.addChild(sprite)
+      }
+      img.src = currentGame.backgroundImage
     }
 
-    const bg = new Graphics()
-    bg.rect(PADDING, PADDING, w - PADDING * 2, h - PADDING * 2)
-    bg.fill({ color: 0x1a1a2e, alpha: 0.95 })
-    bc.addChild(bg)
+    if (!currentGame.backgroundImage) {
+      const bg = new Graphics()
+      bg.rect(PADDING, PADDING, w - PADDING * 2, h - PADDING * 2)
+      bg.fill({ color: 0x1a1a2e, alpha: 0.95 })
+      bc.addChild(bg)
+    }
   }, [currentGame])
 
   const renderGrid = useCallback(() => {
@@ -247,6 +430,8 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
   useEffect(() => { renderBackgroundRef.current = renderBackground }, [renderBackground])
   useEffect(() => { renderGridRef.current = renderGrid }, [renderGrid])
   useEffect(() => { renderTerrainRef.current = renderTerrain }, [renderTerrain])
+  useEffect(() => { renderUnitsRef.current = renderUnits }, [renderUnits])
+  useEffect(() => { renderOverlayRef.current = renderOverlay }, [renderOverlay])
 
   useEffect(() => {
     const el = containerRef.current
@@ -256,6 +441,8 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
       renderBackground()
       renderGrid()
       renderTerrain()
+      renderUnits()
+      renderOverlay()
       return
     }
 
@@ -277,12 +464,16 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
       const bg = new Container()
       const grid = new Container()
       const terrain = new Container()
+      const units = new Container()
       const edit = new Container()
-      app.stage.addChild(bg, grid, terrain, edit)
+      const overlay = new Container()
+      app.stage.addChild(bg, grid, terrain, units, edit, overlay)
       bgContainerRef.current = bg
       gridContainerRef.current = grid
       terrainContainerRef.current = terrain
+      unitsContainerRef.current = units
       editContainerRef.current = edit
+      overlayContainerRef.current = overlay
 
       const hit = new Graphics()
       const drawHit = () => {
@@ -295,9 +486,21 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
       hit.cursor = 'crosshair'
       hit.on('pointerdown', (e) => {
         if (editingTerrainRef.current && !draggingVertex.current) addVertex(e.global.x, e.global.y)
+        if (placementModeRef.current && onTableClickRef.current && currentGame) {
+          const { w, h } = sizeRef.current
+          if (w && h) {
+            const pos = screenToTableRef.current(e.global.x, e.global.y, w, h)
+            if (pos.x >= 0 && pos.x <= currentGame.tableWidth && pos.y >= 0 && pos.y <= currentGame.tableHeight) {
+              onTableClickRef.current(Math.round(pos.x), Math.round(pos.y))
+            }
+          }
+          return
+        }
         if (!editingTerrainRef.current) {
           setSelectedTerrainId(null)
           setMenuPos(null)
+          setSelectedUnitId(null)
+          setUnitMenuPos(null)
         }
       })
       app.stage.addChildAt(hit, 0)
@@ -311,6 +514,8 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
           renderBackgroundRef.current()
           renderGridRef.current()
           renderTerrainRef.current()
+          renderUnitsRef.current()
+          renderOverlayRef.current()
         }
       })
       ro.observe(el)
@@ -319,6 +524,8 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
       renderBackgroundRef.current()
       renderGridRef.current()
       renderTerrainRef.current()
+      renderUnitsRef.current()
+      renderOverlayRef.current()
     })
 
     return () => {
@@ -333,6 +540,14 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
   }, [])
 
   useEffect(() => {
+    renderBackground()
+  }, [renderBackground])
+
+  useEffect(() => {
+    renderGrid()
+  }, [renderGrid])
+
+  useEffect(() => {
     renderTerrain()
   }, [renderTerrain])
 
@@ -341,11 +556,19 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
   }, [renderEditingState])
 
   useEffect(() => {
+    renderUnits()
+  }, [renderUnits])
+
+  useEffect(() => {
+    renderOverlay()
+  }, [renderOverlay])
+
+  useEffect(() => {
     const app = appRef.current
     if (!app || !initialized.current || app.stage.children.length === 0) return
     const hit = app.stage.getChildAt(0) as Graphics
-    hit.cursor = editingTerrain ? 'crosshair' : 'default'
-  }, [editingTerrain])
+    hit.cursor = (editingTerrain || placementMode) ? 'crosshair' : 'default'
+  }, [editingTerrain, placementMode])
 
   const closePolygon = useCallback(() => {
     if (tempVertices.length < 3) return
@@ -363,6 +586,7 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
   }, [onCancelEdit])
 
   const selectedTerrain = selectedTerrainId && currentGame?.terrain.find((t) => t.id === selectedTerrainId)
+  const selectedUnit = selectedUnitId && currentGame?.units.find((u) => u.id === selectedUnitId)
   const terrainTypes: TerrainType[] = ['island', 'shoal', 'reef']
 
   return (
@@ -425,6 +649,53 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit }: GameC
           >
             Delete
           </button>
+        </div>
+      )}
+      {selectedUnit && unitMenuPos && (
+        <div
+          className="fixed z-50 bg-gray-900 border border-gray-700 rounded-xl p-3 shadow-xl w-52"
+          style={{ left: unitMenuPos.x, top: unitMenuPos.y, transform: 'translate(-50%, -100%) translateY(-8px)' }}
+        >
+          <div className="text-xs text-gray-400 mb-1 uppercase tracking-wider font-semibold">{selectedUnit.name}</div>
+          <div className="flex gap-1.5 mb-2">
+            <span className={`text-xs px-1.5 py-0.5 rounded ${selectedUnit.side === 'player' ? 'bg-blue-600/30 text-blue-300' : 'bg-red-600/30 text-red-300'}`}>
+              {selectedUnit.side === 'player' ? 'Player' : 'AI'}
+            </span>
+            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-700 text-gray-300 capitalize">{selectedUnit.status}</span>
+          </div>
+          <div className="text-xs text-gray-500 mb-3">
+            Orientation: {COMPASS_LABELS[selectedUnit.orientation]} &middot; Attitude: {currentGame ? ATTITUDE_LABELS[computeAttitude(currentGame.windDirection, selectedUnit.orientation)] : ''}
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={() => {
+                setUnitMenuPos(null)
+                setSelectedUnitId(null)
+                onEditUnit?.(selectedUnit.id)
+              }}
+              className="flex-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+            >
+              Edit
+            </button>
+            <button
+              onClick={() => {
+                removeUnit(selectedUnit.id)
+                setSelectedUnitId(null)
+                setUnitMenuPos(null)
+              }}
+              className="flex-1 text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+            >
+              Delete
+            </button>
+          </div>
+        </div>
+      )}
+      {placementMode && placementCursorPos && (
+        <div
+          className="fixed z-40 pointer-events-none bg-gray-900/80 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-200"
+          style={{ left: placementCursorPos.screenX + 14, top: placementCursorPos.screenY - 10 }}
+        >
+          {placementCursorPos.tableX}, {placementCursorPos.tableY} mm
         </div>
       )}
     </div>

@@ -24,10 +24,38 @@ export interface TableTerrain {
   type: TerrainType
 }
 
+export const ARC_SIDES = ['bow', 'stern', 'port', 'starboard'] as const
+export type ArcSide = (typeof ARC_SIDES)[number]
+
+export function arcSideToAngles(side: ArcSide): { minAngle: number; maxAngle: number } {
+  switch (side) {
+    case 'bow':
+      return { minAngle: 326.25, maxAngle: 33.75 }
+    case 'stern':
+      return { minAngle: 146.25, maxAngle: 213.75 }
+    case 'port':
+      return { minAngle: 247.5, maxAngle: 292.5 }
+    case 'starboard':
+      return { minAngle: 67.5, maxAngle: 112.5 }
+  }
+}
+
+export function arcSideLabel(side: ArcSide): string {
+  switch (side) {
+    case 'bow':
+      return 'Bow'
+    case 'stern':
+      return 'Stern'
+    case 'port':
+      return 'Port'
+    case 'starboard':
+      return 'Starboard'
+  }
+}
+
 export interface FiringArc {
   id: string
-  minAngle: number
-  maxAngle: number
+  side: ArcSide
   maxRange: number
 }
 

@@ -1,8 +1,8 @@
 import { useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
+import { COMPASS_LABELS } from '../utils/attitude'
 
 const WIND_POINTS = Array.from({ length: 32 }, (_, i) => i)
-const COMPASS_LABELS = ['N', 'NbE', 'NNE', 'NEbN', 'NE', 'NEbE', 'ENE', 'EbN', 'E', 'EbS', 'ESE', 'SEbE', 'SE', 'SEbS', 'SSE', 'SbE', 'S', 'SbW', 'SSW', 'SWbS', 'SW', 'SWbW', 'WSW', 'WbS', 'W', 'WbN', 'WNW', 'NWbW', 'NW', 'NWbN', 'NNW', 'NbW']
 
 interface TableSetupProps {
   onComplete: () => void
