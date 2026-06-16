@@ -80,6 +80,13 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
     }
     return result
   })
+  const [arcWeapons, setArcWeapons] = useState<Record<ArcSide, number>>(() => {
+    const result: Record<ArcSide, number> = { bow: 0, stern: 0, port: 0, starboard: 0 }
+    for (const a of unit?.firingArcs ?? []) {
+      result[a.side] = a.weapons
+    }
+    return result
+  })
   const defaultProfile: Record<Attitude, SpeedRange> = {
     in_irons: { min: 0, max: 0 },
     beating: { min: 20, max: 60 },
@@ -106,16 +113,21 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       maxTurnPoints,
       speedProfile,
       driftSpeed,
+
       firingArcs: (Object.entries(arcRanges) as [ArcSide, number][])
         .filter(([, r]) => r > 0)
         .map(([side, maxRange]) => ({
           id: unit?.firingArcs.find((a) => a.side === side)?.id ?? uuid(),
           side,
           maxRange,
+          weapons: arcWeapons[side] || 10,
         })),
       attitude: computedAttitude,
       prevAttitude: computedAttitude,
       hiddenAIOrder: null,
+      playerOrder: null,
+      hiddenAIFirePlan: null,
+      lastFireChunk: null,
       isInIrons: false,
     })
   }
@@ -283,15 +295,24 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
             <div className="space-y-1.5">
               {ARC_SIDES.map((s) => (
                 <div key={s} className="flex items-center gap-2">
-                  <span className="text-xs text-gray-300 w-24">{arcSideLabel(s)}</span>
+                  <span className="text-xs text-gray-300 w-20">{arcSideLabel(s)}</span>
                   <input
                     type="number"
                     min={0}
                     value={arcRanges[s]}
                     onChange={(e) => setArcRanges({ ...arcRanges, [s]: Math.max(0, Number(e.target.value)) })}
-                    className="w-20 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                    className="w-16 bg-gray-800 border border-gray-700 rounded px-1.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
-                  <span className="text-xs text-gray-500">mm</span>
+                  <span className="text-xs text-gray-500 w-6">mm</span>
+                  <span className="text-xs text-gray-500">×</span>
+                  <input
+                    type="number"
+                    min={0}
+                    value={arcWeapons[s]}
+                    onChange={(e) => setArcWeapons({ ...arcWeapons, [s]: Math.max(0, Number(e.target.value)) })}
+                    className="w-12 bg-gray-800 border border-gray-700 rounded px-1.5 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  />
+                  <span className="text-xs text-gray-500">guns</span>
                 </div>
               ))}
             </div>

@@ -3,7 +3,9 @@ import { Application, Graphics, Container, Sprite, Texture } from 'pixi.js'
 import { useGameStore } from '../stores/gameStore'
 import { TERRAIN_COLORS } from './TerrainPanel'
 import type { TerrainType, UnitStatus } from '../types'
+import { arcSideToAngles } from '../types'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
+import { checkFiringArc } from '../game/combat'
 
 const GRID_COLOR = 0xffffff
 const GRID_ALPHA = 0.06
@@ -40,7 +42,7 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
   const [selectedTerrainId, setSelectedTerrainId] = useState<string | null>(null)
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null)
-  const [unitMenuPos, setUnitMenuPos] = useState<{ x: number; y: number } | null>(null)
+
   const [placementCursorPos, setPlacementCursorPos] = useState<{ screenX: number; screenY: number; tableX: number; tableY: number } | null>(null)
   const [moveTerrainId, setMoveTerrainId] = useState<string | null>(null)
   const [moveVertices, setMoveVertices] = useState<{ x: number; y: number }[]>([])
@@ -352,7 +354,6 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
         if (editingTerrainRef.current || placementModeRef.current) return
         e.stopPropagation()
         setSelectedUnitId(unitId)
-        setUnitMenuPos({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })
         setSelectedTerrainId(null)
         setMenuPos(null)
       })
@@ -377,7 +378,7 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
 
     const compassR = 16
     const cx = ox + PADDING + compassR + 8
-    const cy = oy + PADDING + compassR + 8
+    const cy = oy + currentGame.tableHeight * s - PADDING - compassR - 8
 
     const g = new Graphics()
     g.circle(cx, cy, compassR)
@@ -473,7 +474,72 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
         drawPlanPath(u, u.playerOrder, 0x3b82f6)
       }
     }
-  }, [currentGame, tableToScreen])
+
+    const selectedUnit = currentGame.units.find((u) => u.id === selectedUnitId)
+    if (selectedUnit && selectedUnit.firingArcs.length > 0) {
+      const unitPos = tableToScreen(selectedUnit.position.x, selectedUnit.position.y, w, h)
+      const orientDeg = selectedUnit.orientation * 360 / 32
+      const enemies = currentGame.units.filter((u) => u.side !== selectedUnit.side)
+
+      const drawArcWedge = (minDeg: number, maxDeg: number, radiusMm: number, color: number) => {
+        const worldMin = ((orientDeg + minDeg) % 360 + 360) % 360
+        const worldMax = ((orientDeg + maxDeg) % 360 + 360) % 360
+        const radius = radiusMm * s
+        const toScreenAngle = (deg: number) => (deg - 90) * Math.PI / 180
+        const steps = 16
+
+        const wedge = new Graphics()
+        if (worldMin <= worldMax) {
+          wedge.moveTo(unitPos.x, unitPos.y)
+          wedge.lineTo(unitPos.x + Math.cos(toScreenAngle(worldMin)) * radius, unitPos.y + Math.sin(toScreenAngle(worldMin)) * radius)
+          for (let i = 1; i <= steps; i++) {
+            const angle = worldMin + (worldMax - worldMin) * (i / steps)
+            wedge.lineTo(unitPos.x + Math.cos(toScreenAngle(angle)) * radius, unitPos.y + Math.sin(toScreenAngle(angle)) * radius)
+          }
+          wedge.closePath()
+        } else {
+          wedge.moveTo(unitPos.x, unitPos.y)
+          wedge.lineTo(unitPos.x + Math.cos(toScreenAngle(worldMin)) * radius, unitPos.y + Math.sin(toScreenAngle(worldMin)) * radius)
+          for (let i = 1; i <= steps; i++) {
+            const angle = worldMin + (360 + worldMax - worldMin) * (i / steps)
+            const a = angle >= 360 ? angle - 360 : angle
+            wedge.lineTo(unitPos.x + Math.cos(toScreenAngle(a)) * radius, unitPos.y + Math.sin(toScreenAngle(a)) * radius)
+          }
+          wedge.closePath()
+        }
+        wedge.fill({ color, alpha: 0.15 })
+        wedge.stroke({ color, width: 1.5, alpha: 0.4 })
+        oc.addChild(wedge)
+
+        const border = new Graphics()
+        const toA = toScreenAngle(worldMin)
+        border.moveTo(unitPos.x, unitPos.y)
+        border.lineTo(unitPos.x + Math.cos(toA) * radius, unitPos.y + Math.sin(toA) * radius)
+        const toB = toScreenAngle(worldMax)
+        border.moveTo(unitPos.x, unitPos.y)
+        border.lineTo(unitPos.x + Math.cos(toB) * radius, unitPos.y + Math.sin(toB) * radius)
+        border.stroke({ color, width: 1, alpha: 0.5 })
+        oc.addChild(border)
+
+        const arcSteps = 24
+        const arcG = new Graphics()
+        const aStart = toScreenAngle(worldMin)
+        const aEnd = toScreenAngle(worldMax)
+        let sweep = aEnd - aStart
+        if (sweep < 0) sweep += Math.PI * 2
+        arcG.arc(unitPos.x, unitPos.y, radius, aStart, aStart + sweep)
+        arcG.stroke({ color, width: 1.5, alpha: 0.3 })
+        oc.addChild(arcG)
+      }
+
+      for (const arc of selectedUnit.firingArcs) {
+        const a = arcSideToAngles(arc.side)
+        const hasEnemyInArc = enemies.some((e) => checkFiringArc(selectedUnit, e).inArc)
+        const color = hasEnemyInArc ? 0x22c55e : 0xef4444
+        drawArcWedge(a.minAngle, a.maxAngle, arc.maxRange, color)
+      }
+    }
+  }, [currentGame, tableToScreen, selectedUnitId])
 
   const renderBackground = useCallback(() => {
     const bc = bgContainerRef.current
@@ -890,10 +956,9 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
           </button>
         </div>
       )}
-      {selectedUnit && unitMenuPos && (
+      {selectedUnit && (
         <div
-          className="fixed z-50 bg-gray-900 border border-gray-700 rounded-xl p-3 shadow-xl w-52"
-          style={{ left: unitMenuPos.x, top: unitMenuPos.y, transform: 'translate(-50%, -100%) translateY(-8px)' }}
+          className="absolute z-50 bg-gray-900 border border-gray-700 rounded-xl p-3 shadow-xl w-52 left-2 top-2"
         >
           <div className="text-xs text-gray-400 mb-1 uppercase tracking-wider font-semibold">{selectedUnit.name}</div>
           <div className="flex gap-1.5 mb-2">
@@ -908,7 +973,6 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
           <div className="flex gap-2">
             <button
               onClick={() => {
-                setUnitMenuPos(null)
                 setSelectedUnitId(null)
                 onEditUnit?.(selectedUnit.id)
               }}
@@ -920,7 +984,6 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
               onClick={() => {
                 removeUnit(selectedUnit.id)
                 setSelectedUnitId(null)
-                setUnitMenuPos(null)
               }}
               className="flex-1 text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
             >

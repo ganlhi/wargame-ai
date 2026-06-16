@@ -55,55 +55,62 @@ function inArc(angle: number, minAngle: number, maxAngle: number): boolean {
   return angle >= minAngle || angle <= maxAngle
 }
 
-function isTargetInAnyArc(
+function getEngageableWeapons(
   firer: Unit,
   firerHeading: number,
   target: Unit,
-): { inArc: boolean; isBroadside: boolean; isRaking: boolean } {
+): { totalWeapons: number; broadsideWeapons: number; isRaking: boolean } {
   const dist = distance(firer.position, target.position)
   const angleToTarget = angleBetweenPoints(firer.position, target.position)
   const relAngle = relativeAngle(firerHeading, angleToTarget)
   const targetHeading = headingDeg(target.orientation)
+  const targetRelAngle = relativeAngle(targetHeading, angleBetweenPoints(target.position, firer.position))
+
+  let totalWeapons = 0
+  let broadsideWeapons = 0
+  let isRaking = false
+  const targetBow = { minAngle: 326.25, maxAngle: 33.75 }
+  const targetStern = { minAngle: 146.25, maxAngle: 213.75 }
 
   for (const arc of firer.firingArcs) {
     if (dist > arc.maxRange) continue
     const a = arcSideToAngles(arc.side)
     if (!inArc(relAngle, a.minAngle, a.maxAngle)) continue
 
-    const broadside = arc.side === 'port' || arc.side === 'starboard'
-
-    const targetRel = relativeAngle(targetHeading, angleBetweenPoints(target.position, firer.position))
-    const targetBow = { minAngle: 326.25, maxAngle: 33.75 }
-    const targetStern = { minAngle: 146.25, maxAngle: 213.75 }
-    const raking = inArc(targetRel, targetBow.minAngle, targetBow.maxAngle) ||
-                   inArc(targetRel, targetStern.minAngle, targetStern.maxAngle)
-
-    return { inArc: true, isBroadside: broadside, isRaking: raking }
-  }
-
-  return { inArc: false, isBroadside: false, isRaking: false }
-}
-
-function getEnemiesInFiringArcs(unit: Unit, enemies: Unit[]): {
-  firingCount: number
-  broadsideCount: number
-  rakingCount: number
-} {
-  const h = headingDeg(unit.orientation)
-  let firingCount = 0
-  let broadsideCount = 0
-  let rakingCount = 0
-
-  for (const e of enemies) {
-    const result = isTargetInAnyArc(unit, h, e)
-    if (result.inArc) {
-      firingCount++
-      if (result.isBroadside) broadsideCount++
-      if (result.isRaking) rakingCount++
+    const weapons = arc.weapons || 1
+    totalWeapons += weapons
+    if (arc.side === 'port' || arc.side === 'starboard') {
+      broadsideWeapons += weapons
+    }
+    if (
+      inArc(targetRelAngle, targetBow.minAngle, targetBow.maxAngle) ||
+      inArc(targetRelAngle, targetStern.minAngle, targetStern.maxAngle)
+    ) {
+      isRaking = true
     }
   }
 
-  return { firingCount, broadsideCount, rakingCount }
+  return { totalWeapons, broadsideWeapons, isRaking }
+}
+
+function getTotalEnemyWeaponsInArc(unit: Unit, enemies: Unit[]): {
+  totalWeapons: number
+  broadsideWeapons: number
+  anyRaking: boolean
+} {
+  const h = headingDeg(unit.orientation)
+  let totalWeapons = 0
+  let broadsideWeapons = 0
+  let anyRaking = false
+
+  for (const e of enemies) {
+    const result = getEngageableWeapons(unit, h, e)
+    totalWeapons += result.totalWeapons
+    broadsideWeapons += result.broadsideWeapons
+    if (result.isRaking) anyRaking = true
+  }
+
+  return { totalWeapons, broadsideWeapons, anyRaking }
 }
 
 function isEnemyBroadsideOnUnit(unit: Unit, enemy: Unit): boolean {
@@ -168,8 +175,8 @@ function scoreAttitude(_attitude: Attitude): number {
 }
 
 function scoreFiring(unit: Unit, enemies: Unit[]): number {
-  const { broadsideCount, rakingCount } = getEnemiesInFiringArcs(unit, enemies)
-  return broadsideCount * 10 + rakingCount * 8
+  const { broadsideWeapons, anyRaking } = getTotalEnemyWeaponsInArc(unit, enemies)
+  return broadsideWeapons * 2 + (anyRaking ? 15 : 0)
 }
 
 function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
@@ -311,43 +318,33 @@ function scoreEnemyBroadsideDanger(unit: Unit, enemies: Unit[]): number {
 function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
   if (enemies.length === 0) return 0
   let bonus = 0
+  const h = headingDeg(unit.orientation)
 
-  switch (unit.aiStyle) {
-    case 'aggressive': {
-      const h = headingDeg(unit.orientation)
-      for (const e of enemies) {
-        const dist = distance(unit.position, e.position)
+  for (const e of enemies) {
+    const dist = distance(unit.position, e.position)
+    const { close, medium, long } = getRangeTiers(e)
+    const weapons = getEngageableWeapons(unit, h, e)
+
+    switch (unit.aiStyle) {
+      case 'aggressive': {
         if (dist < GRAPPLE_RANGE) bonus += 40
-        const result = isTargetInAnyArc(unit, h, e)
-        if (result.isRaking) bonus += 6
-        else if (result.isBroadside) bonus += 4
+        if (weapons.isRaking) bonus += weapons.totalWeapons * 0.6
+        else if (weapons.broadsideWeapons > 0) bonus += weapons.broadsideWeapons * 0.4
+        break
       }
-      break
-    }
-    case 'cautious': {
-      for (const e of enemies) {
-        const dist = distance(unit.position, e.position)
-        const { close, medium, long } = getRangeTiers(e)
-        const h = headingDeg(unit.orientation)
-        const result = isTargetInAnyArc(unit, h, e)
-        if (result.isRaking && dist >= medium && dist <= long) bonus += 40
-        else if (result.isBroadside && dist >= medium && dist <= long) bonus += 20
-        if (result.inArc && dist < close) bonus -= 20
-        if (!result.inArc && dist > long) bonus -= 15
+      case 'cautious': {
+        if (weapons.isRaking && dist >= medium && dist <= long) bonus += weapons.totalWeapons * 2
+        else if (weapons.broadsideWeapons > 0 && dist >= medium && dist <= long) bonus += weapons.broadsideWeapons * 1.5
+        if (weapons.totalWeapons > 0 && dist < close) bonus -= weapons.totalWeapons * 0.5
+        if (weapons.totalWeapons === 0 && dist > long) bonus -= 15
+        break
       }
-      break
-    }
-    case 'defensive': {
-      for (const en of enemies) {
-        const dist = distance(unit.position, en.position)
-        const { close, long } = getRangeTiers(en)
+      case 'defensive': {
         if (dist < close) bonus -= 30
-        if (isEnemyBroadsideOnUnit(unit, en)) {
-          bonus -= 25
-        }
+        if (isEnemyBroadsideOnUnit(unit, e)) bonus -= 25
         if (dist > long) bonus += 30
+        break
       }
-      break
     }
   }
 

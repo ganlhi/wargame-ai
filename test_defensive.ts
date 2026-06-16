@@ -31,7 +31,10 @@ function makePlayerShip(): Unit {
     maxTurnPoints: 6, speedProfile: { ...defaultProfile },
     driftSpeed: 10, firingArcs: [],
     attitude: computeAttitude(13, 4), isInIrons: false,
-    prevAttitude: computeAttitude(13, 4), hiddenAIOrder: null,
+    prevAttitude: computeAttitude(13, 4),     hiddenAIOrder: null,
+    playerOrder: null,
+    hiddenAIFirePlan: null,
+    lastFireChunk: null,
   }
 }
 
@@ -43,12 +46,15 @@ function makeAIShip(style: AIStyle): Unit {
     maxTurnPoints: 6, speedProfile: { ...defaultProfile },
     driftSpeed: 10,
     firingArcs: [
-      { id: 'bow', side: 'bow', maxRange: 120 },
-      { id: 'port', side: 'port', maxRange: 210 },
-      { id: 'starboard', side: 'starboard', maxRange: 210 },
+      { id: 'bow', side: 'bow', maxRange: 120, weapons: 5 },
+      { id: 'port', side: 'port', maxRange: 210, weapons: 15 },
+      { id: 'starboard', side: 'starboard', maxRange: 210, weapons: 15 },
     ],
     attitude: computeAttitude(13, 23), isInIrons: false,
     prevAttitude: computeAttitude(13, 23), hiddenAIOrder: null,
+    playerOrder: null,
+    hiddenAIFirePlan: null,
+    lastFireChunk: null,
   }
 }
 

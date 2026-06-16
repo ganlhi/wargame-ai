@@ -57,6 +57,7 @@ export interface FiringArc {
   id: string
   side: ArcSide
   maxRange: number
+  weapons: number
 }
 
 export interface SpeedRange {
@@ -69,6 +70,12 @@ export interface ActionLogEntry {
   unitId?: string
   unitName?: string
   text: string
+}
+
+export interface FirePlan {
+  targetId: string
+  chunkIndex: number
+  arcSide: ArcSide
 }
 
 export interface Unit {
@@ -88,6 +95,8 @@ export interface Unit {
   prevAttitude: Attitude
   hiddenAIOrder: MovementPlan | null
   playerOrder: MovementPlan | null
+  lastFireChunk: number | null
+  hiddenAIFirePlan: FirePlan | null
 }
 
 export interface MoveChunk {

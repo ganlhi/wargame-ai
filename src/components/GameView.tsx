@@ -6,6 +6,7 @@ import { GameCanvas } from './GameCanvas'
 import { UnitFormModal } from './UnitFormModal'
 import { PlayerMovementPanel } from './PlayerMovementPanel'
 import { COMPASS_LABELS } from '../utils/attitude'
+import { arcSideLabel } from '../types'
 import { suggestMovement } from '../game/ai'
 import type { Unit } from '../types'
 
@@ -287,6 +288,17 @@ export function GameView() {
                             {Math.round(c.distance)}mm{c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}
                           </span>
                         ))}</p>
+                        {aiUnit.hiddenAIFirePlan && (() => {
+                          const target = currentGame.units.find(u => u.id === aiUnit.hiddenAIFirePlan!.targetId)
+                          return (
+                            <p className="text-red-400 font-medium pt-1">
+                              ⚡ Fire {arcSideLabel(aiUnit.hiddenAIFirePlan.arcSide)} at {target?.name ?? 'unknown'} on chunk {aiUnit.hiddenAIFirePlan.chunkIndex + 1}
+                            </p>
+                          )
+                        })()}
+                        {!aiUnit.hiddenAIFirePlan && aiUnit.lastFireChunk !== null && (
+                          <p className="text-gray-600 pt-1">Reloading (fired at chunk {aiUnit.lastFireChunk + 1} last turn)</p>
+                        )}
                       </div>
                     )}
                   </div>

@@ -4,6 +4,7 @@ import { v4 as uuid } from 'uuid'
 import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry, MovementPlan } from '../types'
 import { applyMovementPlan } from '../game/movement'
 import { suggestMovement } from '../game/ai'
+import { computeAIFirePlan } from '../game/combat'
 import { computeAttitude } from '../utils/attitude'
 
 interface GameStore {
@@ -103,9 +104,14 @@ export const useGameStore = create<GameStore>()(
               hiddenAIOrder: u.hiddenAIOrder ?? null,
               playerOrder: u.playerOrder ?? null,
               driftSpeed: u.driftSpeed ?? 10,
-              firingArcs: ((u.firingArcs ?? []) as Record<string, unknown>[]).map((a) =>
-                a.side ? a : { id: String(a.id ?? ''), side: 'starboard' as const, maxRange: Number(a.maxRange ?? 300) }
-              ),
+              lastFireChunk: u.lastFireChunk ?? null,
+              hiddenAIFirePlan: u.hiddenAIFirePlan ?? null,
+              firingArcs: ((u.firingArcs ?? []) as Record<string, unknown>[]).map((a) => ({
+                id: String(a.id ?? ''),
+                side: (a.side as 'bow' | 'stern' | 'port' | 'starboard') ?? 'starboard',
+                maxRange: Number(a.maxRange ?? 300),
+                weapons: Number(a.weapons ?? 10),
+              })),
             })),
             currentTurn: raw.currentTurn ?? 1,
             currentPhase: raw.currentPhase ?? 'setup',
@@ -343,9 +349,17 @@ export const useGameStore = create<GameStore>()(
       revealOrders: () => {
         const game = get().currentGame
         if (!game) return
+
+        const units = game.units.map((u) => {
+          if (u.side !== 'ai' || u.status === 'destroyed' || u.status === 'surrendered') return u
+          const firePlan = computeAIFirePlan(u, game.units, game.windDirection)
+          return { ...u, hiddenAIFirePlan: firePlan, lastFireChunk: firePlan?.chunkIndex ?? u.lastFireChunk }
+        })
+
         set({
           currentGame: {
             ...game,
+            units,
             currentPhase: 'reveal',
             updatedAt: now(),
           },
@@ -395,6 +409,7 @@ export const useGameStore = create<GameStore>()(
             isInIrons: result.isInIrons,
             hiddenAIOrder: null,
             playerOrder: null,
+            hiddenAIFirePlan: null,
           }
         }
 
