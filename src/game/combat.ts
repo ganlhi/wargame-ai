@@ -79,8 +79,10 @@ function simulateChunk(
   if (irons) {
     const driftDir = (windDirection + 8) % 32
     const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
-    x += Math.cos(driftAngle) * driftSpeed
-    y += Math.sin(driftAngle) * driftSpeed
+    // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
+    const driftPerChunk = driftSpeed / 5
+    x += Math.cos(driftAngle) * driftPerChunk
+    y += Math.sin(driftAngle) * driftPerChunk
   } else {
     const vec = orientationToVector(orient)
     x += vec.dx * chunk.distance

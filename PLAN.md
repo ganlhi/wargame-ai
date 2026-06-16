@@ -74,7 +74,7 @@
 - [x] **5.3** `computeEffectiveMaxSpeed(baseMaxSpeed, turnPoints)` — 5% penalty per turn point
 - [x] **5.4** `splitMovement(distance)` — 5 whole chunks, larger first
 - [x] **5.5** `applyMovementPlan(...)` — walks 5 chunks, per-chunk edge clamping, returns position/orientation/attitude/isInIrons/hitBoundary/**distanceTraveled**/path
-- [x] **5.6** Voluntary in-irons rule — drift downwind, keep turning until beating on the other tack (in `enumerateMovementPlans` + `applyMovementPlan`)
+- [x] **5.6** Voluntary in-irons rule — drift downwind, keep turning until beating on the other tack (in `enumerateMovementPlans` + `applyMovementPlan`). _`driftSpeed` is the **total drift per turn**; per-chunk loops apply `driftSpeed / 5` and full-turn projections apply `driftSpeed`. This is applied consistently across resolution (`movement.ts`), fire simulation (`combat.ts`), the ghost-path preview (`GameCanvas.tsx`), and AI lookahead (`ai.ts`)._
 - [x] **5.7** `enumerateMovementPlans(...)` — brute-forces distances × 1–2 turns at any chunk boundary, plus in-irons / voluntary-in-irons plans
 
 ---

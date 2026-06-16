@@ -442,8 +442,10 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
         if (u.isInIrons) {
           const driftDir = (currentGame.windDirection + 8) % 32
           const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
-          px += Math.cos(driftAngle) * (u.driftSpeed ?? 10)
-          py += Math.sin(driftAngle) * (u.driftSpeed ?? 10)
+          // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
+          const driftPerChunk = (u.driftSpeed ?? 10) / 5
+          px += Math.cos(driftAngle) * driftPerChunk
+          py += Math.sin(driftAngle) * driftPerChunk
         } else {
           const vecAngle = (ox * Math.PI / 16) - Math.PI / 2
           px += Math.cos(vecAngle) * chunk.distance

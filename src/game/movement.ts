@@ -85,8 +85,10 @@ export function applyMovementPlan(
     if (isInIrons) {
       const driftDir = (windAngle + 8) % 32
       const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
-      x += Math.cos(driftAngle) * (unit.driftSpeed ?? 10)
-      y += Math.sin(driftAngle) * (unit.driftSpeed ?? 10)
+      // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
+      const driftPerChunk = (unit.driftSpeed ?? 10) / 5
+      x += Math.cos(driftAngle) * driftPerChunk
+      y += Math.sin(driftAngle) * driftPerChunk
     } else {
       const vec = orientationToVector(orientation)
       const nextX = x + vec.dx * chunk.distance

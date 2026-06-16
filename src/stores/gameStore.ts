@@ -393,7 +393,7 @@ export const useGameStore = create<GameStore>()(
           if (!plan) continue
 
           const result = applyMovementPlan(u, plan, game.windDirection, game.tableWidth, game.tableHeight)
-          const drift = result.isInIrons ? ` (drifted ${u.driftSpeed}mm per chunk)` : ''
+          const drift = result.isInIrons ? ` (drifted ${u.driftSpeed}mm)` : ''
           const boundary = result.hitBoundary ? ' [hit table edge]' : ''
           get().addLogEntry({
             turn: game.currentTurn,

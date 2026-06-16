@@ -402,9 +402,10 @@ function projectNextPosition(
   if (isInIrons) {
     const driftDir = (windAngle + 8) % 32
     const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+    // driftSpeed is the total drift for a whole turn; this projects one turn ahead.
     return {
-      x: pos.x + Math.cos(driftAngle) * driftSpeed * 5,
-      y: pos.y + Math.sin(driftAngle) * driftSpeed * 5,
+      x: pos.x + Math.cos(driftAngle) * driftSpeed,
+      y: pos.y + Math.sin(driftAngle) * driftSpeed,
     }
   }
   const range = speedProfile[attitude]
@@ -559,9 +560,10 @@ export function suggestMovement(
         if (e.isInIrons) {
           const driftDir = (windDirection + 8) % 32
           const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+          // driftSpeed is the total drift for a whole turn; this projects one turn ahead.
           ePos = {
-            x: e.position.x + Math.cos(driftAngle) * (e.driftSpeed ?? 10) * 5,
-            y: e.position.y + Math.sin(driftAngle) * (e.driftSpeed ?? 10) * 5,
+            x: e.position.x + Math.cos(driftAngle) * (e.driftSpeed ?? 10),
+            y: e.position.y + Math.sin(driftAngle) * (e.driftSpeed ?? 10),
           }
         }
         return { ...e, position: ePos }
