@@ -88,11 +88,11 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
     return result
   })
   const defaultProfile: Record<Attitude, SpeedRange> = {
-    in_irons: { min: 0, max: 0 },
-    beating: { min: 20, max: 60 },
-    reaching: { min: 40, max: 100 },
-    quarter_reaching: { min: 60, max: 120 },
-    running: { min: 50, max: 110 },
+    in_irons: { max: 0 },
+    beating: { max: 60 },
+    reaching: { max: 100 },
+    quarter_reaching: { max: 120 },
+    running: { max: 110 },
   }
   const [driftSpeed, setDriftSpeed] = useState(unit?.driftSpeed ?? 10)
   const [speedProfile, setSpeedProfile] = useState<Record<Attitude, SpeedRange>>(unit?.speedProfile ?? defaultProfile)
@@ -124,6 +124,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
         })),
       attitude: computedAttitude,
       prevAttitude: computedAttitude,
+      prevMoveDistance: 0,
       hiddenAIOrder: null,
       playerOrder: null,
       hiddenAIFirePlan: null,
@@ -242,24 +243,11 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
           </div>
 
           <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
-            <div className="text-xs text-gray-400 font-medium mb-2">Speed per Attitude (mm/turn)</div>
+            <div className="text-xs text-gray-400 font-medium mb-2">Max Speed per Attitude (mm/turn)</div>
             <div className="space-y-1.5">
               {(Object.keys(defaultProfile) as Attitude[]).map((att) => (
-                <div key={att} className="grid grid-cols-5 gap-1 items-center">
-                  <span className="text-xs text-gray-300 col-span-2">{ATTITUDE_LABELS[att]}</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={speedProfile[att].min}
-                    onChange={(e) =>
-                      setSpeedProfile((prev) => ({
-                        ...prev,
-                        [att]: { ...prev[att], min: Math.max(0, Number(e.target.value)) },
-                      }))
-                    }
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    placeholder="Min"
-                  />
+                <div key={att} className="grid grid-cols-3 gap-1 items-center">
+                  <span className="text-xs text-gray-300">{ATTITUDE_LABELS[att]}</span>
                   <input
                     type="number"
                     min={0}
@@ -267,7 +255,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
                     onChange={(e) =>
                       setSpeedProfile((prev) => ({
                         ...prev,
-                        [att]: { ...prev[att], max: Math.max(0, Number(e.target.value)) },
+                        [att]: { max: Math.max(0, Number(e.target.value)) },
                       }))
                     }
                     className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"

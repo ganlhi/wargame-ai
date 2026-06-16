@@ -3,12 +3,12 @@ import { suggestMovement, evaluatePosition } from './src/game/ai'
 import { applyMovementPlan, enumerateMovementPlans } from './src/game/movement'
 import { computeAttitude } from './src/utils/attitude'
 
-const defaultProfile: Record<Attitude, { min: number; max: number }> = {
-  in_irons: { min: 0, max: 0 },
-  beating: { min: 20, max: 60 },
-  reaching: { min: 40, max: 100 },
-  quarter_reaching: { min: 60, max: 120 },
-  running: { min: 50, max: 110 },
+const defaultProfile: Record<Attitude, { max: number }> = {
+  in_irons: { max: 0 },
+  beating: { max: 60 },
+  reaching: { max: 100 },
+  quarter_reaching: { max: 120 },
+  running: { max: 110 },
 }
 
 function makePlayerShip(): Unit {
@@ -30,6 +30,7 @@ function makePlayerShip(): Unit {
     attitude: computeAttitude(13, 0),
     isInIrons: false,
     prevAttitude: computeAttitude(13, 0),
+    prevMoveDistance: 0,
     hiddenAIOrder: null,
     playerOrder: null,
     hiddenAIFirePlan: null,
@@ -56,6 +57,7 @@ function makeAIShip(style: AIStyle): Unit {
     attitude: computeAttitude(13, 23),
     isInIrons: false,
     prevAttitude: computeAttitude(13, 23),
+    prevMoveDistance: 0,
     hiddenAIOrder: null,
     playerOrder: null,
     hiddenAIFirePlan: null,

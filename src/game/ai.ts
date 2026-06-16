@@ -416,7 +416,7 @@ function projectNextPosition(
     }
   }
   const range = speedProfile[attitude]
-  const midSpeed = Math.round((range.min + range.max) / 2)
+  const midSpeed = Math.round(range.max / 2)
   const vec = orientationToVector(orientation)
   return {
     x: pos.x + vec.dx * midSpeed,
@@ -561,7 +561,7 @@ export function suggestMovement(
     if (enemies.length > 0) {
       const projectedEnemies = enemies.map((e) => {
         const eRange = e.speedProfile[e.attitude]
-        const eSpeed = Math.round((eRange.min + eRange.max) / 2)
+        const eSpeed = Math.round(eRange.max / 2)
         const eVec = orientationToVector(e.orientation)
         let ePos = { x: e.position.x + eVec.dx * eSpeed, y: e.position.y + eVec.dy * eSpeed }
         if (e.isInIrons) {

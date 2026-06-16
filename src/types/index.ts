@@ -61,7 +61,6 @@ export interface FiringArc {
 }
 
 export interface SpeedRange {
-  min: number
   max: number
 }
 
@@ -93,6 +92,7 @@ export interface Unit {
   attitude: Attitude
   isInIrons: boolean
   prevAttitude: Attitude
+  prevMoveDistance: number
   hiddenAIOrder: MovementPlan | null
   playerOrder: MovementPlan | null
   lastFireChunk: number | null

@@ -5,7 +5,7 @@ import { TERRAIN_COLORS } from './TerrainPanel'
 import type { TerrainType, UnitStatus } from '../types'
 import { arcSideToAngles } from '../types'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
-import { checkFiringArc } from '../game/combat'
+import { orientationToVector } from '../game/movement'
 
 const GRID_COLOR = 0xffffff
 const GRID_ALPHA = 0.06
@@ -476,67 +476,79 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
     }
 
     const selectedUnit = currentGame.units.find((u) => u.id === selectedUnitId)
-    if (selectedUnit && selectedUnit.firingArcs.length > 0) {
-      const unitPos = tableToScreen(selectedUnit.position.x, selectedUnit.position.y, w, h)
-      const orientDeg = selectedUnit.orientation * 360 / 32
-      const enemies = currentGame.units.filter((u) => u.side !== selectedUnit.side)
+    if (selectedUnit && selectedUnit.firingArcs.length > 0 && selectedUnit.hiddenAIFirePlan) {
+      const plan = selectedUnit.hiddenAIOrder
+      const firePlan = selectedUnit.hiddenAIFirePlan
 
-      const drawArcWedge = (minDeg: number, maxDeg: number, radiusMm: number, color: number) => {
-        const worldMin = ((orientDeg + minDeg) % 360 + 360) % 360
-        const worldMax = ((orientDeg + maxDeg) % 360 + 360) % 360
-        const radius = radiusMm * s
-        const toScreenAngle = (deg: number) => (deg - 90) * Math.PI / 180
-        const steps = 16
-
-        const wedge = new Graphics()
-        if (worldMin <= worldMax) {
-          wedge.moveTo(unitPos.x, unitPos.y)
-          wedge.lineTo(unitPos.x + Math.cos(toScreenAngle(worldMin)) * radius, unitPos.y + Math.sin(toScreenAngle(worldMin)) * radius)
-          for (let i = 1; i <= steps; i++) {
-            const angle = worldMin + (worldMax - worldMin) * (i / steps)
-            wedge.lineTo(unitPos.x + Math.cos(toScreenAngle(angle)) * radius, unitPos.y + Math.sin(toScreenAngle(angle)) * radius)
+      if (plan && firePlan) {
+        let pos = { ...selectedUnit.position }
+        let orient = selectedUnit.orientation
+        for (let ci = 0; ci <= firePlan.chunkIndex && ci < plan.chunks.length; ci++) {
+          const chunk = plan.chunks[ci]
+          const vec = orientationToVector(orient)
+          pos.x += vec.dx * chunk.distance
+          pos.y += vec.dy * chunk.distance
+          if (chunk.turn) {
+            const dir = chunk.turn.direction === 'port' ? -1 : 1
+            orient = (orient + dir * chunk.turn.points + 32) % 32
           }
-          wedge.closePath()
-        } else {
-          wedge.moveTo(unitPos.x, unitPos.y)
-          wedge.lineTo(unitPos.x + Math.cos(toScreenAngle(worldMin)) * radius, unitPos.y + Math.sin(toScreenAngle(worldMin)) * radius)
-          for (let i = 1; i <= steps; i++) {
-            const angle = worldMin + (360 + worldMax - worldMin) * (i / steps)
-            const a = angle >= 360 ? angle - 360 : angle
-            wedge.lineTo(unitPos.x + Math.cos(toScreenAngle(a)) * radius, unitPos.y + Math.sin(toScreenAngle(a)) * radius)
-          }
-          wedge.closePath()
         }
-        wedge.fill({ color, alpha: 0.15 })
-        wedge.stroke({ color, width: 1.5, alpha: 0.4 })
-        oc.addChild(wedge)
 
-        const border = new Graphics()
-        const toA = toScreenAngle(worldMin)
-        border.moveTo(unitPos.x, unitPos.y)
-        border.lineTo(unitPos.x + Math.cos(toA) * radius, unitPos.y + Math.sin(toA) * radius)
-        const toB = toScreenAngle(worldMax)
-        border.moveTo(unitPos.x, unitPos.y)
-        border.lineTo(unitPos.x + Math.cos(toB) * radius, unitPos.y + Math.sin(toB) * radius)
-        border.stroke({ color, width: 1, alpha: 0.5 })
-        oc.addChild(border)
+        const firingPos = tableToScreen(pos.x, pos.y, w, h)
+        const firingOrientDeg = orient * 360 / 32
+        const arc = selectedUnit.firingArcs.find((a) => a.side === firePlan.arcSide)
+        if (arc) {
+          const a = arcSideToAngles(arc.side)
+          const worldMin = ((firingOrientDeg + a.minAngle) % 360 + 360) % 360
+          const worldMax = ((firingOrientDeg + a.maxAngle) % 360 + 360) % 360
+          const radius = arc.maxRange * s
+          const toScreenAngle = (deg: number) => (deg - 90) * Math.PI / 180
+          const steps = 16
+          const color = 0x22c55e
 
-        const arcSteps = 24
-        const arcG = new Graphics()
-        const aStart = toScreenAngle(worldMin)
-        const aEnd = toScreenAngle(worldMax)
-        let sweep = aEnd - aStart
-        if (sweep < 0) sweep += Math.PI * 2
-        arcG.arc(unitPos.x, unitPos.y, radius, aStart, aStart + sweep)
-        arcG.stroke({ color, width: 1.5, alpha: 0.3 })
-        oc.addChild(arcG)
-      }
+          const wedge = new Graphics()
+          if (worldMin <= worldMax) {
+            wedge.moveTo(firingPos.x, firingPos.y)
+            wedge.lineTo(firingPos.x + Math.cos(toScreenAngle(worldMin)) * radius, firingPos.y + Math.sin(toScreenAngle(worldMin)) * radius)
+            for (let i = 1; i <= steps; i++) {
+              const angle = worldMin + (worldMax - worldMin) * (i / steps)
+              wedge.lineTo(firingPos.x + Math.cos(toScreenAngle(angle)) * radius, firingPos.y + Math.sin(toScreenAngle(angle)) * radius)
+            }
+            wedge.closePath()
+          } else {
+            wedge.moveTo(firingPos.x, firingPos.y)
+            wedge.lineTo(firingPos.x + Math.cos(toScreenAngle(worldMin)) * radius, firingPos.y + Math.sin(toScreenAngle(worldMin)) * radius)
+            for (let i = 1; i <= steps; i++) {
+              const angle = worldMin + (360 + worldMax - worldMin) * (i / steps)
+              const a2 = angle >= 360 ? angle - 360 : angle
+              wedge.lineTo(firingPos.x + Math.cos(toScreenAngle(a2)) * radius, firingPos.y + Math.sin(toScreenAngle(a2)) * radius)
+            }
+            wedge.closePath()
+          }
+          wedge.fill({ color, alpha: 0.15 })
+          wedge.stroke({ color, width: 1.5, alpha: 0.4 })
+          oc.addChild(wedge)
 
-      for (const arc of selectedUnit.firingArcs) {
-        const a = arcSideToAngles(arc.side)
-        const hasEnemyInArc = enemies.some((e) => checkFiringArc(selectedUnit, e).inArc)
-        const color = hasEnemyInArc ? 0x22c55e : 0xef4444
-        drawArcWedge(a.minAngle, a.maxAngle, arc.maxRange, color)
+          const border = new Graphics()
+          const toA = toScreenAngle(worldMin)
+          border.moveTo(firingPos.x, firingPos.y)
+          border.lineTo(firingPos.x + Math.cos(toA) * radius, firingPos.y + Math.sin(toA) * radius)
+          const toB = toScreenAngle(worldMax)
+          border.moveTo(firingPos.x, firingPos.y)
+          border.lineTo(firingPos.x + Math.cos(toB) * radius, firingPos.y + Math.sin(toB) * radius)
+          border.stroke({ color, width: 1, alpha: 0.5 })
+          oc.addChild(border)
+
+          const arcSteps = 24
+          const arcG = new Graphics()
+          const aStart = toScreenAngle(worldMin)
+          const aEnd = toScreenAngle(worldMax)
+          let sweep = aEnd - aStart
+          if (sweep < 0) sweep += Math.PI * 2
+          arcG.arc(firingPos.x, firingPos.y, radius, aStart, aStart + sweep)
+          arcG.stroke({ color, width: 1.5, alpha: 0.3 })
+          oc.addChild(arcG)
+        }
       }
     }
   }, [currentGame, tableToScreen, selectedUnitId])

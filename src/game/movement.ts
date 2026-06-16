@@ -150,7 +150,8 @@ export function enumerateMovementPlans(
 
   const range = getSpeedRangeForAttitude(computeAttitude(windAngle, unit.orientation), speedProfile)
 
-  const startDist = Math.ceil(range.min / MOVEMENT_STEP) * MOVEMENT_STEP
+  const effectiveMinDist = (unit.prevMoveDistance || 0) / 2
+  const startDist = Math.ceil(effectiveMinDist / MOVEMENT_STEP) * MOVEMENT_STEP
   const endDist = range.max
 
   for (let dist = startDist; dist <= endDist; dist += MOVEMENT_STEP) {
@@ -221,13 +222,15 @@ export function enumerateMovementPlans(
     plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, range.max))
   }
 
-  for (let tp = 1; tp <= maxTurnPoints; tp++) {
-    for (const dir of (['port', 'starboard'] as const)) {
-      plans.push(buildPlan([0, 0, 0, 0, 0], [{ afterChunk: 0, direction: dir, points: tp }], tp, range.max))
+  if (effectiveMinDist <= 0) {
+    for (let tp = 1; tp <= maxTurnPoints; tp++) {
+      for (const dir of (['port', 'starboard'] as const)) {
+        plans.push(buildPlan([0, 0, 0, 0, 0], [{ afterChunk: 0, direction: dir, points: tp }], tp, range.max))
+      }
     }
-  }
 
-  plans.push(buildPlan([0, 0, 0, 0, 0], [], 0, range.max))
+    plans.push(buildPlan([0, 0, 0, 0, 0], [], 0, range.max))
+  }
 
   return plans
 }
