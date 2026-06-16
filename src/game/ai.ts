@@ -1,6 +1,7 @@
 import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange } from '../types'
 import { arcSideToAngles } from '../types'
 import { enumerateMovementPlans, applyMovementPlan, orientationToVector } from './movement'
+import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle } from '../utils/geometry'
 
 const GRAPPLE_RANGE = 20
 const EDGE_DANGER = 120
@@ -24,29 +25,6 @@ function getRangeTiers(enemy: Unit): { close: number; medium: number; long: numb
   return { close, medium, long, extreme }
 }
 
-function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
-  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
-}
-
-function headingDeg(orientation: number): number {
-  return ((orientation * 360 / 32) + 270) % 360
-}
-
-function angleBetweenPoints(from: { x: number; y: number }, to: { x: number; y: number }): number {
-  return ((Math.atan2(to.y - from.y, to.x - from.x) * 180 / Math.PI) + 360) % 360
-}
-
-function relativeAngle(fromHeadingDeg: number, toAngleDeg: number): number {
-  return ((toAngleDeg - fromHeadingDeg) + 360) % 360
-}
-
-function inArc(angle: number, minAngle: number, maxAngle: number): boolean {
-  if (minAngle <= maxAngle) {
-    return angle >= minAngle && angle <= maxAngle
-  }
-  return angle >= minAngle || angle <= maxAngle
-}
-
 function getEngageableWeapons(
   firer: Unit,
   firerHeading: number,
@@ -61,8 +39,6 @@ function getEngageableWeapons(
   let totalWeapons = 0
   let broadsideWeapons = 0
   let isRaking = false
-  const targetBow = { minAngle: 326.25, maxAngle: 33.75 }
-  const targetStern = { minAngle: 146.25, maxAngle: 213.75 }
 
   for (const arc of firer.firingArcs) {
     if (dist > arc.maxRange) continue
@@ -74,10 +50,7 @@ function getEngageableWeapons(
     if (arc.side === 'port' || arc.side === 'starboard') {
       broadsideWeapons += weapons
     }
-    if (
-      inArc(targetRelAngle, targetBow.minAngle, targetBow.maxAngle) ||
-      inArc(targetRelAngle, targetStern.minAngle, targetStern.maxAngle)
-    ) {
+    if (isRakingAngle(targetRelAngle)) {
       isRaking = true
     }
   }

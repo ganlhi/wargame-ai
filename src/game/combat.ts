@@ -1,28 +1,6 @@
 import type { Unit, ArcSide } from '../types'
 import { arcSideToAngles } from '../types'
-
-function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
-  return Math.sqrt((a.x - b.x) ** 2 + (a.y - b.y) ** 2)
-}
-
-function headingDeg(orientation: number): number {
-  return ((orientation * 360 / 32) + 270) % 360
-}
-
-function angleBetweenPoints(from: { x: number; y: number }, to: { x: number; y: number }): number {
-  return ((Math.atan2(to.y - from.y, to.x - from.x) * 180 / Math.PI) + 360) % 360
-}
-
-function relativeAngle(fromHeadingDeg: number, toAngleDeg: number): number {
-  return ((toAngleDeg - fromHeadingDeg) + 360) % 360
-}
-
-function inArc(angle: number, minAngle: number, maxAngle: number): boolean {
-  if (minAngle <= maxAngle) {
-    return angle >= minAngle && angle <= maxAngle
-  }
-  return angle >= minAngle || angle <= maxAngle
-}
+import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle } from '../utils/geometry'
 
 export interface FiringResult {
   inArc: boolean
@@ -51,11 +29,7 @@ export function checkFiringArc(firer: Unit, target: Unit): FiringResult {
     if (!inArc(relAngle, a.minAngle, a.maxAngle)) continue
 
     const broadside = arc.side === 'port' || arc.side === 'starboard'
-    const targetBow = { minAngle: 326.25, maxAngle: 33.75 }
-    const targetStern = { minAngle: 146.25, maxAngle: 213.75 }
-    const raking =
-      inArc(targetRelAngle, targetBow.minAngle, targetBow.maxAngle) ||
-      inArc(targetRelAngle, targetStern.minAngle, targetStern.maxAngle)
+    const raking = isRakingAngle(targetRelAngle)
 
     return { inArc: true, isBroadside: broadside, isRaking: raking, dist, arcSide: arc.side, weapons: arc.weapons || 1 }
   }

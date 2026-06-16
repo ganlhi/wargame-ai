@@ -141,7 +141,7 @@ Ordered roughly by value-to-effort. Each item references the phase it completes.
 - [ ] **10.14 Performance (9.4)** — code-split the ~560 kB bundle, sprite batching, lazy terrain rendering, debounced save.
 
 ### Code health
-- [ ] **10.15 De-duplicate geometry helpers.** `distance`, `headingDeg`, `angleBetweenPoints`, `relativeAngle`, `inArc`, and the bow/stern raking arcs are duplicated across `ai.ts` and `combat.ts` — extract to `src/utils/geometry.ts`, and reuse `arcSideToAngles` instead of inline magic angles.
+- [x] **10.15 De-duplicate geometry helpers.** `distance`, `headingDeg`, `angleBetweenPoints`, `relativeAngle`, `inArc`, and an `isRakingAngle()` helper now live in `src/utils/geometry.ts`; `ai.ts` and `combat.ts` import from it. The bow/stern raking arc angles are no longer inlined — `isRakingAngle` derives them from `arcSideToAngles`, so every arc angle (`326.25/33.75`, `146.25/213.75`, …) lives only in `arcSideToAngles` in `types/index.ts`.
 - [ ] **10.16 Tests.** Add a small Vitest suite for the pure logic (`movement.ts`, `attitude.ts`, `ai.ts`), especially attitude wrap-around, in-irons handling, and `distanceTraveled` clamping. (The old ad-hoc `debug_ai.ts` / `test_defensive.ts` scratch scripts were removed.)
 
 ---
