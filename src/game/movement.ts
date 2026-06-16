@@ -24,7 +24,7 @@ export function splitMovement(distance: number): [number, number, number, number
   return chunks as [number, number, number, number, number]
 }
 
-function orientationToVector(orientation: number): { dx: number; dy: number } {
+export function orientationToVector(orientation: number): { dx: number; dy: number } {
   const angle = (orientation * Math.PI / 16) - Math.PI / 2
   return { dx: Math.cos(angle), dy: Math.sin(angle) }
 }
@@ -200,13 +200,24 @@ export function enumerateMovementPlans(
     }
   }
 
-  if (prevAttitude === 'beating' && !unit.isInIrons) {
+  if (!unit.isInIrons) {
     const dir = getInIronsTurnDirection(unit.orientation, windAngle)
     const turn1 = Math.ceil(maxTurnPoints / 2)
     const turn2 = maxTurnPoints - turn1
     const turns: { afterChunk: number; direction: 'port' | 'starboard'; points: number }[] = []
     if (turn1 > 0) turns.push({ afterChunk: 1, direction: dir, points: turn1 })
     if (turn2 > 0) turns.push({ afterChunk: 3, direction: dir, points: turn2 })
+    plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, range.max))
+  }
+
+  if (prevAttitude === 'beating' && !unit.isInIrons) {
+    const dir = getInIronsTurnDirection(unit.orientation, windAngle)
+    const oppDir = dir === 'port' ? 'starboard' : 'port'
+    const turn1 = Math.ceil(maxTurnPoints / 2)
+    const turn2 = maxTurnPoints - turn1
+    const turns: { afterChunk: number; direction: 'port' | 'starboard'; points: number }[] = []
+    if (turn1 > 0) turns.push({ afterChunk: 1, direction: oppDir, points: turn1 })
+    if (turn2 > 0) turns.push({ afterChunk: 3, direction: oppDir, points: turn2 })
     plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, range.max))
   }
 

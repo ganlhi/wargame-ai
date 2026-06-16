@@ -5,6 +5,7 @@ import { PhotoCapture } from './PhotoCapture'
 import { GameCanvas } from './GameCanvas'
 import { UnitFormModal } from './UnitFormModal'
 import { COMPASS_LABELS } from '../utils/attitude'
+import { suggestMovement } from '../game/ai'
 import type { Unit } from '../types'
 
 export function GameView() {
@@ -64,6 +65,27 @@ export function GameView() {
       addUnit(unit)
     }
     setEditingUnitId(null)
+
+    if (unit.side === 'ai' && currentGame?.currentPhase === 'orders') {
+      const store = useGameStore.getState()
+      const game = store.currentGame
+      if (!game) return
+      const allUnits = game.units.map((u) =>
+        u.id === unit.id ? { ...u, ...unit } : u,
+      )
+      const updated = allUnits.find((u) => u.id === unit.id)!
+      const order = suggestMovement(
+        updated,
+        allUnits,
+        game.terrain,
+        game.windDirection,
+        game.tableWidth,
+        game.tableHeight,
+        existing?.prevAttitude ?? updated.prevAttitude,
+        1,
+      )
+      store.updateUnit(unit.id, { hiddenAIOrder: order })
+    }
   }
 
   const editingUnit = editingUnitId ? currentGame?.units.find((u) => u.id === editingUnitId) : undefined

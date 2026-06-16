@@ -1,12 +1,16 @@
-import type { Unit, MovementPlan, TableTerrain, Attitude } from '../types'
+import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange } from '../types'
 import { arcSideToAngles } from '../types'
-import { enumerateMovementPlans, applyMovementPlan } from './movement'
+import { enumerateMovementPlans, applyMovementPlan, orientationToVector } from './movement'
 
 const GRAPPLE_RANGE = 20
-const EDGE_DANGER = 100
-const EDGE_PENALTY_MULT = 1
+const EDGE_DANGER = 120
+const EDGE_PENALTY_MULT = 2
 const TERRAIN_DANGER = 30
 const TERRAIN_PENALTY_MULT = 0.5
+
+const BOUNDARY_PENALTY = -5000
+const FUTURE_BOUNDARY_PENALTY = -3000
+const LOOKAHEAD_DISCOUNT = 0.5
 
 const ATTITUDE_ORDER: Record<Attitude, number> = {
   quarter_reaching: 5,
@@ -185,15 +189,17 @@ function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
         break
       }
       case 'cautious': {
-        if (dist >= close && dist <= medium) score += 40
-        else if (dist < close) score -= 20
-        else score -= 10
+        if (dist >= medium && dist <= long) score += 50
+        else if (dist < close) score -= 30
+        else if (dist < medium) score -= 10
+        else score -= 15
         break
       }
       case 'defensive': {
-        if (dist > long) score += 40
+        if (dist > long) score += 60
         else if (dist > medium) score += 20
-        else if (dist < close) score -= 30
+        else if (dist < close) score -= 50
+        else score -= 20
         break
       }
     }
@@ -202,12 +208,64 @@ function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
   return score
 }
 
-function scoreEdgeProximity(pos: { x: number; y: number }, tableW: number, tableH: number): number {
+const EDGE_STYLE_MULT: Record<string, number> = {
+  aggressive: 1,
+  cautious: 1.5,
+  defensive: 2,
+}
+
+function scoreEdgeProximity(pos: { x: number; y: number }, tableW: number, tableH: number, style: string): number {
   const edgeDist = Math.min(pos.x, pos.y, tableW - pos.x, tableH - pos.y)
   if (edgeDist < EDGE_DANGER) {
-    return -(EDGE_DANGER - edgeDist) * EDGE_PENALTY_MULT
+    return -(EDGE_DANGER - edgeDist) * EDGE_PENALTY_MULT * (EDGE_STYLE_MULT[style] ?? 1)
   }
   return 0
+}
+
+function scoreHeadingTowardEdge(
+  pos: { x: number; y: number },
+  orientation: number,
+  tableW: number,
+  tableH: number,
+  aiStyle: string,
+  nearestEnemyDir: { x: number; y: number } | null,
+): number {
+  const vec = orientationToVector(orientation)
+  const HEADING_WARN = 150
+  const STRENGTH = 2
+
+  let maxPenalty = 0
+  if (pos.x < HEADING_WARN && vec.dx < 0) {
+    maxPenalty = Math.max(maxPenalty, (HEADING_WARN - pos.x) * -vec.dx * STRENGTH)
+  }
+  if ((tableW - pos.x) < HEADING_WARN && vec.dx > 0) {
+    maxPenalty = Math.max(maxPenalty, (HEADING_WARN - (tableW - pos.x)) * vec.dx * STRENGTH)
+  }
+  if (pos.y < HEADING_WARN && vec.dy < 0) {
+    maxPenalty = Math.max(maxPenalty, (HEADING_WARN - pos.y) * -vec.dy * STRENGTH)
+  }
+  if ((tableH - pos.y) < HEADING_WARN && vec.dy > 0) {
+    maxPenalty = Math.max(maxPenalty, (HEADING_WARN - (tableH - pos.y)) * vec.dy * STRENGTH)
+  }
+
+  if (maxPenalty === 0 || !nearestEnemyDir) return -maxPenalty
+
+  const moveLen = Math.sqrt(vec.dx * vec.dx + vec.dy * vec.dy)
+  const enemyLen = Math.sqrt(nearestEnemyDir.x * nearestEnemyDir.x + nearestEnemyDir.y * nearestEnemyDir.y)
+  if (moveLen === 0 || enemyLen === 0) return -maxPenalty
+
+  const dot = (vec.dx * nearestEnemyDir.x + vec.dy * nearestEnemyDir.y) / (moveLen * enemyLen)
+
+  let reduction = 0
+  if (aiStyle === 'defensive' && dot < -0.3) {
+    reduction = 0.5
+  } else if (aiStyle === 'aggressive' && dot > 0.3) {
+    reduction = 0.5
+  } else if (aiStyle === 'cautious') {
+    reduction = 0.2
+  }
+
+  return -(maxPenalty * (1 - reduction))
 }
 
 function scoreTerrainProximity(pos: { x: number; y: number }, terrain: TableTerrain[]): number {
@@ -269,13 +327,13 @@ function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
     case 'cautious': {
       for (const e of enemies) {
         const dist = distance(unit.position, e.position)
-        const { close, medium } = getRangeTiers(e)
+        const { close, medium, long } = getRangeTiers(e)
         const h = headingDeg(unit.orientation)
         const result = isTargetInAnyArc(unit, h, e)
-        if (result.isRaking && dist >= close && dist <= medium) bonus += 40
-        else if (result.isBroadside && dist >= close && dist <= medium) bonus += 20
-        if (result.inArc && dist < close && !result.isRaking) bonus -= 15
-        if (!result.inArc && dist > medium) bonus -= 10
+        if (result.isRaking && dist >= medium && dist <= long) bonus += 40
+        else if (result.isBroadside && dist >= medium && dist <= long) bonus += 20
+        if (result.inArc && dist < close) bonus -= 20
+        if (!result.inArc && dist > long) bonus -= 15
       }
       break
     }
@@ -283,11 +341,11 @@ function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
       for (const en of enemies) {
         const dist = distance(unit.position, en.position)
         const { close, long } = getRangeTiers(en)
-        if (dist < close) bonus -= 20
+        if (dist < close) bonus -= 30
         if (isEnemyBroadsideOnUnit(unit, en)) {
-          bonus -= 15
+          bonus -= 25
         }
-        if (dist > long) bonus += 20
+        if (dist > long) bonus += 30
       }
       break
     }
@@ -309,7 +367,7 @@ export function evaluatePosition(
   score += scoreFiring(unit, enemies)
   score += scoreDistanceByStyle(unit, enemies)
   score += scoreStyleSpecific(unit, enemies)
-  score += scoreEdgeProximity(unit.position, tableWidth, tableHeight)
+  score += scoreEdgeProximity(unit.position, tableWidth, tableHeight, unit.aiStyle)
   score += scoreTerrainProximity(unit.position, terrain)
   score += scoreEnemyBroadsideDanger(unit, enemies)
 
@@ -341,6 +399,32 @@ function selectPlan(
   const noisy = scores.map((s) => s + (Math.random() - 0.5) * range * (1 - difficulty) * 2)
   const bestNoisy = Math.max(...noisy)
   return plans[noisy.indexOf(bestNoisy)]
+}
+
+function projectNextPosition(
+  pos: { x: number; y: number },
+  orientation: number,
+  attitude: Attitude,
+  isInIrons: boolean,
+  speedProfile: Record<Attitude, SpeedRange>,
+  driftSpeed: number,
+  windAngle: number,
+): { x: number; y: number } {
+  if (isInIrons) {
+    const driftDir = (windAngle + 8) % 32
+    const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+    return {
+      x: pos.x + Math.cos(driftAngle) * driftSpeed * 5,
+      y: pos.y + Math.sin(driftAngle) * driftSpeed * 5,
+    }
+  }
+  const range = speedProfile[attitude]
+  const midSpeed = Math.round((range.min + range.max) / 2)
+  const vec = orientationToVector(orientation)
+  return {
+    x: pos.x + vec.dx * midSpeed,
+    y: pos.y + vec.dy * midSpeed,
+  }
 }
 
 export function suggestMovement(
@@ -383,10 +467,7 @@ export function suggestMovement(
 
   if (plans.length === 0) return null
 
-  const BOUNDARY_PENALTY = -500
   const TERRAIN_RELIEF_BONUS = 0.3
-  const CLOSING_BONUS = 3
-
   const currentTerrainDist = terrain.length > 0 ? minEdgeDistance(unit.position, terrain) : Infinity
 
   const planScores = plans.map((plan) => {
@@ -406,15 +487,106 @@ export function suggestMovement(
     const dx = newState.position.x - unit.position.x
     const dy = newState.position.y - unit.position.y
     const moveDist = Math.sqrt(dx * dx + dy * dy)
-    if (moveDist > 0 && enemies.length > 0) {
+
+    let nearestEnemyDir: { x: number; y: number } | null = null
+    if (enemies.length > 0) {
       const nearestEnemy = enemies.reduce((a, b) =>
         distance(newState.position, a.position) < distance(newState.position, b.position) ? a : b,
       )
       const toEnemyX = nearestEnemy.position.x - unit.position.x
       const toEnemyY = nearestEnemy.position.y - unit.position.y
-      const toEnemyDist = Math.sqrt(toEnemyX * toEnemyX + toEnemyY * toEnemyY)
-      const dot = (dx * toEnemyX + dy * toEnemyY) / (moveDist * toEnemyDist)
-      score += dot * moveDist * CLOSING_BONUS
+      nearestEnemyDir = { x: toEnemyX, y: toEnemyY }
+
+      if (moveDist > 0) {
+        const toEnemyDist = Math.sqrt(toEnemyX * toEnemyX + toEnemyY * toEnemyY)
+        const dot = (dx * toEnemyX + dy * toEnemyY) / (moveDist * toEnemyDist)
+
+        if (unit.aiStyle === 'defensive') {
+          const curDist = distance(unit.position, nearestEnemy.position)
+          const newDist = distance(newState.position, nearestEnemy.position)
+          score += (newDist - curDist) * 0.1 + 10
+        } else if (unit.aiStyle === 'cautious') {
+          score += dot * moveDist * 0.8
+          score += (1 - Math.abs(dot)) * moveDist * 0.15 + 10
+        } else {
+          score += dot * moveDist * 3
+        }
+      }
+    }
+
+    if (moveDist > 0 || plan.totalTurnPoints > 0) {
+      score += scoreHeadingTowardEdge(newState.position, newState.orientation, tableWidth, tableHeight, unit.aiStyle, nearestEnemyDir)
+    }
+
+    const orientChange = Math.abs(((newState.orientation - unit.orientation) % 32 + 32) % 32)
+    const orientCost = Math.min(orientChange, 32 - orientChange)
+    score += moveDist * 0.5 + orientCost * 2
+
+    const projectedPos = projectNextPosition(
+      newState.position,
+      newState.orientation,
+      newState.attitude,
+      newState.isInIrons,
+      unit.speedProfile,
+      unit.driftSpeed ?? 10,
+      windDirection,
+    )
+
+    if (
+      projectedPos.x < 0 || projectedPos.x > tableWidth ||
+      projectedPos.y < 0 || projectedPos.y > tableHeight
+    ) {
+      score += FUTURE_BOUNDARY_PENALTY
+    }
+
+    const projectedPos2 = projectNextPosition(
+      projectedPos,
+      newState.orientation,
+      newState.attitude,
+      newState.isInIrons,
+      unit.speedProfile,
+      unit.driftSpeed ?? 10,
+      windDirection,
+    )
+
+    if (
+      projectedPos2.x < 0 || projectedPos2.x > tableWidth ||
+      projectedPos2.y < 0 || projectedPos2.y > tableHeight
+    ) {
+      score += FUTURE_BOUNDARY_PENALTY * LOOKAHEAD_DISCOUNT
+    }
+
+    score += scoreEdgeProximity(projectedPos, tableWidth, tableHeight, unit.aiStyle) * LOOKAHEAD_DISCOUNT
+    score += scoreHeadingTowardEdge(projectedPos, newState.orientation, tableWidth, tableHeight, unit.aiStyle, nearestEnemyDir) * LOOKAHEAD_DISCOUNT
+
+    score += scoreEdgeProximity(projectedPos2, tableWidth, tableHeight, unit.aiStyle) * LOOKAHEAD_DISCOUNT * LOOKAHEAD_DISCOUNT
+
+    if (enemies.length > 0) {
+      const projectedEnemies = enemies.map((e) => {
+        const eRange = e.speedProfile[e.attitude]
+        const eSpeed = Math.round((eRange.min + eRange.max) / 2)
+        const eVec = orientationToVector(e.orientation)
+        let ePos = { x: e.position.x + eVec.dx * eSpeed, y: e.position.y + eVec.dy * eSpeed }
+        if (e.isInIrons) {
+          const driftDir = (windDirection + 8) % 32
+          const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+          ePos = {
+            x: e.position.x + Math.cos(driftAngle) * (e.driftSpeed ?? 10) * 5,
+            y: e.position.y + Math.sin(driftAngle) * (e.driftSpeed ?? 10) * 5,
+          }
+        }
+        return { ...e, position: ePos }
+      })
+
+      const futureUnit: Unit = {
+        ...unit,
+        position: projectedPos,
+        orientation: newState.orientation,
+        attitude: newState.attitude,
+        isInIrons: newState.isInIrons,
+      }
+      const futureScore = evaluatePosition(futureUnit, projectedEnemies, terrain, tableWidth, tableHeight)
+      score += futureScore * LOOKAHEAD_DISCOUNT
     }
 
     return score
