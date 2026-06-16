@@ -142,7 +142,7 @@ Ordered roughly by value-to-effort. Each item references the phase it completes.
 
 ### Code health
 - [x] **10.15 De-duplicate geometry helpers.** `distance`, `headingDeg`, `angleBetweenPoints`, `relativeAngle`, `inArc`, and an `isRakingAngle()` helper now live in `src/utils/geometry.ts`; `ai.ts` and `combat.ts` import from it. The bow/stern raking arc angles are no longer inlined — `isRakingAngle` derives them from `arcSideToAngles`, so every arc angle (`326.25/33.75`, `146.25/213.75`, …) lives only in `arcSideToAngles` in `types/index.ts`.
-- [ ] **10.16 Tests.** Add a small Vitest suite for the pure logic (`movement.ts`, `attitude.ts`, `ai.ts`), especially attitude wrap-around, in-irons handling, and `distanceTraveled` clamping. (The old ad-hoc `debug_ai.ts` / `test_defensive.ts` scratch scripts were removed.)
+- [x] **10.16 Tests.** Vitest suite added (`npm test` / `npm run test:watch`) covering the pure logic: `attitude.test.ts` (band boundaries, wrap-around, tack symmetry), `movement.test.ts` (chunking, turn-point penalty, heading vector, straight/clamped/turning moves, `distanceTraveled`, in-irons drift split over 5 chunks, plan enumeration limits), and `ai.test.ts` (style-based distance scoring, can't-act → null, valid 5-chunk plans, immobilised stays put). 21 tests. _Remaining: component/UI tests are still absent (the ad-hoc `debug_ai.ts` / `test_defensive.ts` scratch scripts were removed earlier)._
 
 ---
 
