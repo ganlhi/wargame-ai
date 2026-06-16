@@ -1,368 +1,181 @@
 # Implementation Plan — Wargame AI
 
+> **Status as of 2026-06-16.** This plan has been reconciled with the code actually on `main`.
+> Legend: `[x]` done · `[~]` partially done / deviates from original plan · `[ ]` not started.
+> Items marked `[~]` or `[ ]` are consolidated as actionable work in **Phase 10 — Remaining Work**.
+
 ## Tech Stack
 
-| Layer | Choice | Rationale |
-|-------|--------|-----------|
-| Framework | React 19 + TypeScript | Latest stable, `use()` for async, built-in form actions, no reason to stay on 18 |
-| Build tool | Vite | Fast HMR, ESM-native, good for mobile targets |
-| State management | Zustand | Lightweight, no boilerplate, works outside React tree for game logic |
-| Canvas / rendering | PixiJS (v8) | High-performance 2D rendering, needed for smooth map interaction on tablets |
-| Persistence | localStorage via a thin wrapper | Full offline support, no server required |
-| Camera / image | `getUserMedia` API + custom canvas processing | No extra deps for photo capture; simple undistortion via perspective transform (math) |
-| Routing | React Router (if multi-page) or none (single-screen app) | The app is likely a single-page with modals/panels |
-| Styling | Tailwind CSS | Rapid responsive design, good for tablet-sized screens |
+| Layer | Planned | Actual | Notes |
+|-------|---------|--------|-------|
+| Framework | React 19 + TypeScript | ✅ React 19 + TS | |
+| Build tool | Vite | ✅ Vite 8 | |
+| State management | Zustand | ✅ Zustand 5 (`persist`) | Only `savedGames` + default dims are persisted via middleware; full game state is written to a per-game `game-${id}` localStorage key on explicit save |
+| Canvas / rendering | PixiJS v8 | ✅ PixiJS 8 | Main JS bundle ~560 kB — code-split later (9.4) |
+| Persistence | localStorage wrapper | ✅ localStorage | No auto-save yet (see 7.5) |
+| Camera / image | `getUserMedia` + canvas | ✅ `getUserMedia` + hand-rolled homography | `PhotoCapture.tsx` |
+| Routing | React Router or none | ✅ None | `App.tsx` switches `currentGame ? GameView : MainMenu` |
+| Styling | Tailwind CSS | ✅ Tailwind v4 (`@tailwindcss/vite`) | |
+| Formatting / lint | ESLint + Prettier | ✅ ESLint (clean) + `.prettierrc` | |
 
 ---
 
 ## Phase 0 — Project Scaffolding
 
-- [ ] **0.1** Initialize Vite + React + TypeScript project
-- [ ] **0.2** Install and configure Tailwind CSS
-- [ ] **0.3** Install Zustand, PixiJS v8, and a couple of small utility libs (uuid, etc.)
-- [ ] **0.4** Set up ESLint, Prettier, and basic project folder structure:
-
-```
-src/
-  components/       # React components
-  game/             # Pure game logic (movement, AI, detection)
-  stores/           # Zustand stores
-  types/            # TypeScript types / interfaces
-  utils/            # Helper functions
-  hooks/            # Custom React hooks
-  assets/           # Static assets (icons, sprites)
-```
-
-- [ ] **0.5** Create a basic App shell with responsive layout (sidebar + canvas area) that works on tablet-sized screens (min 8")
+- [x] **0.1** Initialize Vite + React + TypeScript project
+- [x] **0.2** Install and configure Tailwind CSS — _v4 via `@tailwindcss/vite`, `@import "tailwindcss"` in `index.css`_
+- [x] **0.3** Install Zustand, PixiJS v8, uuid
+- [~] **0.4** ESLint, Prettier, and folder structure — _present, but `src/hooks/` does not exist (no custom hooks yet); `assets/` is empty_
+- [x] **0.5** App shell with responsive layout (sidebar + canvas area)
 
 ---
 
 ## Phase 1 — Main Menu & Game Management
 
-- [ ] **1.1** Build a main menu screen shown on app load:
-  - List saved games showing name, last played date, unit count
-  - "New Game" button → creates a fresh game and enters setup mode
-  - Click a saved game → loads it and enters setup/game mode
-  - Delete button on each save with confirmation
-  - Empty state illustration/text when no saves exist
-
-- [ ] **1.2** Game navigation:
-  - Back button / breadcrumb from setup/game view to main menu
-  - Prompt to save on exit if unsaved changes exist
-  - "Save & Exit" and "Exit Without Saving" options
-
-- [ ] **1.3** Update the game store to support multiple games:
-  - Store holds a list of saved games (id, name, createdAt, updatedAt)
-  - Loading a game populates the full state from the save slot
-  - Switch to a new route or screen state
+- [x] **1.1** Main menu screen (`MainMenu.tsx`) — list saved games, New Game, load, delete, empty state
+- [~] **1.2** Game navigation — _exit-to-menu works and `hasUnsavedChanges` is tracked; an explicit "save on exit" prompt with "Save & Exit" / "Exit Without Saving" is not implemented (a freshly-created, never-saved game is dropped on exit)_
+- [x] **1.3** Multi-game support in the store (`savedGames` list, load populates full state)
 
 ---
 
 ## Phase 2 — Core Data Model & Types
 
-- [ ] **2.1** Define all TypeScript interfaces in `src/types/`:
-
-  - `TableTerrain` — polygon vertices, type (island, shoal, etc.)
-  - `WindDirection` — integer 0–31 (points, 0 = North)
-  - `FiringArc` — min/max angle relative to bow, max range in mm
-  - `UnitStatus` — `active | grappled | immobilised | destroyed | surrendered`
-  - `AIStyle` — `aggressive | cautious | defensive`
-  - `Attitude` — `in_irons | beating | reaching | quarter_reaching | running`
-  - `MoveChunk` — distance + optional turn (direction, points)
-  - `MovementPlan` — array of 5 MoveChunks, total turn points, effective speed
-  - `Unit` — id, name, side (`player | ai`), position (x,y), orientation (points 0-31), status, AI style, max turn points, min/max speed, firing arcs, attitude
-  - `GameState` — table dimensions, terrain list, wind direction, units list, current turn, phase
-
-- [ ] **2.2** Create a Zustand store (`useGameStore`) with actions:
-  - CRUD for units
-  - CRUD for terrain
-  - Wind direction get/set
-  - Turn management
-  - Persistence to localStorage (Zustand middleware `persist`)
+- [~] **2.1** TypeScript interfaces in `src/types/` — _all core types exist (`TableTerrain`, `Attitude`, `UnitStatus`, `AIStyle`, `MoveChunk`, `MovementPlan`, `Unit`, `GameState`, `ActionLogEntry`, `FirePlan`). Deviations from the original sketch:_
+  - `FiringArc` is `{ side: bow|stern|port|starboard, maxRange, weapons }` — **not** free min/max angle. Arc angles are derived from `side` via `arcSideToAngles()`.
+  - `SpeedRange` is `{ max }` only — **no per-attitude `min`** (see 5.2).
+  - `Unit` carries extra runtime fields not in the sketch: `driftSpeed`, `isInIrons`, `prevAttitude`, `prevMoveDistance`, `hiddenAIOrder`, `playerOrder`, `lastFireChunk`, `hiddenAIFirePlan`.
+  - `WindDirection` is a plain `number` (0–31) on `GameState.windDirection`, not a named type.
+- [x] **2.2** Zustand store (`useGameStore`) — CRUD for units/terrain, wind get/set, turn management, `persist`
 
 ---
 
 ## Phase 3 — Table Setup & Terrain Editor
 
-- [ ] **3.1** Build a table creation wizard / screen:
-  - Set table dimensions (width, height in mm / cm)
-  - Choose wind direction (compass-like picker)
-
-- [ ] **3.2** Implement photo capture flow:
-  - Open device camera via `getUserMedia` in a modal
-  - Snap photo and display as overlay on the table
-  - Apply a perspective transform (4-corner drag) to undistort the image into a rectangle matching table dimensions
-  - Store the undistorted image as a `data:` URL or blob URL for background rendering
-
-- [ ] **3.3** Build terrain polygon editor:
-  - Click to place vertices on the table image
-  - Drag vertices to refine
-  - Support delete vertex, close polygon, mark as island/shoal/reef
-  - Show terrain list with delete button for each
-
-- [ ] **3.4** Render the table canvas with PixiJS:
-  - Background: the undistorted photo (semi-transparent grid overlay)
-  - Terrain polygons rendered as filled shapes with different colours per type
+- [x] **3.1** Table creation screen (`TableSetup.tsx`) — dimensions + compass wind picker
+- [x] **3.2** Photo capture flow (`PhotoCapture.tsx`) — `getUserMedia`, 4-corner drag, perspective **homography** undistortion, stored as data URL
+- [x] **3.3** Terrain polygon editor (`TerrainPanel.tsx` + canvas) — place/drag/delete vertices, type island/shoal/reef, terrain list
+- [x] **3.4** PixiJS table canvas (`GameCanvas.tsx`) — background photo, grid overlay, coloured terrain polygons
 
 ---
 
 ## Phase 4 — Unit Management
 
-- [ ] **4.1** Build a unit creation panel:
-  - Unit name (text input)
-  - Side toggle: Player / AI
-  - AI style dropdown (only when AI)
-  - Max turn points (number input, default 6)
-  - Min speed, max speed (mm per turn)
-  - Firing arcs editor: add/remove arcs, set min angle, max angle, max range
-
-- [ ] **4.2** Placement mode:
-  - Click on the table canvas to place the unit
-  - Orientation compass: a draggable indicator or left/right buttons to rotate (32 points)
-  - Display unit as a ship icon (simple triangle/arrow shape) at the correct orientation
-
-- [ ] **4.3** Unit interaction on the canvas:
-  - Click unit to select it → show info panel
-  - Drag unit to reposition
-  - Rotation handles (or buttons in info panel) to change orientation
-  - Context menu or info panel to change status, AI style, or delete unit
-  - Show unit label (name) near the unit icon
-
-- [ ] **4.4** Unit status management:
-  - Visual indicators for status (coloured border / overlay): green=active, orange=immobilised, red=destroyed, grey=surrendered, chain=grappled
-  - Grapple link: draw a line between grappled units
+- [~] **4.1** Unit creation panel (`UnitFormModal.tsx`) — name, side, AI style, max turn points, firing arcs editor. _Deviation: arcs are edited by side + maxRange + weapon count; speed is a per-attitude `max` profile (+ `driftSpeed`) rather than a single min/max speed pair._
+- [x] **4.2** Placement mode — click to place, orientation control, ship icon at correct heading
+- [x] **4.3** Unit interaction — select, drag, rotate, context menu / form to change status / style / delete, name label
+- [~] **4.4** Unit status management — _status colours implemented (active/immobilised/destroyed/surrendered/grappled). **Grapple link line between units is NOT drawn**, and there is no "grappled-by" relationship (see Phase 10)._
 
 ---
 
-## Phase 5 — Core Movement Logic (Pure Functions)
+## Phase 5 — Core Movement Logic (`src/game/movement.ts`, `src/utils/attitude.ts`)
 
-- [ ] **5.1** Implement wind/attitude calculation:
-
-  ```
-  computeAttitude(shipOrientation: 0-31, windAngle: 0-31): Attitude
-  ```
-
-  Map orientation relative to wind to the attitude table (points 0-16 relative to bow). Use modulo arithmetic to handle wrap-around.
-
-- [ ] **5.2** Implement per-ship speed preferences per attitude:
-
-  ```
-  getSpeedRangeForAttitude(attitude: Attitude, shipSpeedProfile: Record<Attitude, { min: number, max: number }>): { min: number, max: number }
-  ```
-
-  Each ship defines its own speed range for each attitude (added to the Unit type). Values are not exact — they're a fuzzy guide for the AI to rank attitudes relatively. The general ranking across most ships: quarter_reaching > running > reaching > beating > in_irons (drift only, no forward speed).
-
-- [ ] **5.3** Implement turn-point speed penalty:
-
-  ```
-  computeEffectiveMaxSpeed(baseMaxSpeed: number, turnPoints: number): number
-  ```
-
-  Each turn point reduces speed by 5%. So `effectiveMax = baseMax * (1 - turnPoints * 0.05)`.
-
-- [ ] **5.4** Implement movement chunking:
-
-  ```
-  splitMovement(distance: number): [number, number, number, number, number]
-  ```
-
-  Split into 5 whole-number chunks as evenly as possible, with larger chunks first. E.g., 167 → `[34, 34, 33, 33, 33]`.
-
-- [ ] **5.5** Implement position / orientation update:
-
-  ```
-  applyMovementPlan(unit: Unit, plan: MovementPlan, windAngle: number): { newPosition, newOrientation, newAttitude }
-  ```
-
-  Walk through 5 chunks, applying each straight movement + any turn at the end of the chunk (max 2 turns). Return final state.
-
-- [ ] **5.6** Implement voluntary in-irons rule:
-  - Detect if ship spent previous turn entirely in beating attitude
-  - Allow turning into the wind (toward in-irons) using max turn points
-  - While in irons: no forward movement, drift downwind
-  - Continue turning same direction each turn until beating again on other side
-
-- [ ] **5.7** Generate all valid movement plans for a unit:
-
-  ```
-  enumerateMovementPlans(unit: Unit, windAngle: number): MovementPlan[]
-  ```
-
-  Brute-force over valid distances (min..max in reasonable increments) and valid turn combinations (0..maxTurnPoints, split into 0, 1, or 2 turns at any chunk boundary). This will feed the AI evaluation.
+- [x] **5.1** `computeAttitude(windDirection, orientation)` — modulo wrap-around, points-from-bow mapping
+- [~] **5.2** `getSpeedRangeForAttitude(...)` — _implemented, but `SpeedRange` is `{ max }` only; no `min` per attitude. The minimum move each turn is derived purely from `prevMoveDistance / 2`._
+- [x] **5.3** `computeEffectiveMaxSpeed(baseMaxSpeed, turnPoints)` — 5% penalty per turn point
+- [x] **5.4** `splitMovement(distance)` — 5 whole chunks, larger first
+- [x] **5.5** `applyMovementPlan(...)` — walks 5 chunks, per-chunk edge clamping, returns position/orientation/attitude/isInIrons/hitBoundary/**distanceTraveled**/path
+- [x] **5.6** Voluntary in-irons rule — drift downwind, keep turning until beating on the other tack (in `enumerateMovementPlans` + `applyMovementPlan`)
+- [x] **5.7** `enumerateMovementPlans(...)` — brute-forces distances × 1–2 turns at any chunk boundary, plus in-irons / voluntary-in-irons plans
 
 ---
 
-## Phase 6 — AI Decision System
+## Phase 6 — AI Decision System (`src/game/ai.ts`)
 
-- [ ] **6.1** Implement scoring functions for positions:
-
-  ```
-  evaluatePosition(unit: Unit, allies: Unit[], enemies: Unit[], terrain: Terrain[], tableBounds: Rect): Score
-  ```
-
-  Factors:
-  - Distance to nearest enemy
-  - Angle to enemy (are they in broadside arc?)
-  - Whether enemy is in firing range
-  - Own attitude relative to wind
-  - Distance to table edge (penalty for going off-table)
-  - Proximity to terrain obstacles
-  - Whether any enemy is in own broadside arc at good range
-
-- [ ] **6.2** Implement style-specific scoring modifiers:
-
-  - **Aggressive**: bonus for closing to < 20mm (grapple range), bonus for having broadside on enemy, bonus for raking fire (bow/stern of enemy), bonus near enemy
-  - **Cautious**: bonus for medium range broadside, bonus for raking fire opportunity, penalty for too close without raking fire opportunity, penalty for too far
-  - **Defensive**: bonus for long range, bonus for keeping enemies out of their own broadside arcs, bonus for open escape routes, penalty for being near enemies
-
-- [ ] **6.3** Implement movement selection:
-
-  ```
-  suggestMovement(unit: Unit, allUnits: Unit[], terrain: Terrain[], windAngle: number): MovementPlan
-  ```
-
-  1. Enumerate all valid movement plans (5.7)
-  2. For each plan, simulate the new position/orientation (5.5)
-  3. Score the resulting position (6.1 + 6.2)
-  4. Pick the highest-scoring plan
-  5. Return the plan (for display / preview)
-
-- [ ] **6.4** Build a difficulty / randomness slider:
-  - At 100%: always pick the top-scoring plan
-  - At lower %: add noise to scores or pick probabilistically among top-N plans
+- [~] **6.1** `evaluatePosition(...)` — distance-to-enemy, broadside/raking arcs, firing range, edge penalty, terrain proximity, enemy-broadside danger. _Gap: **attitude is not scored** — `scoreAttitude()` is a `return 0` stub, so the AI gets no reward for ending on a fast point of sail._
+- [x] **6.2** Style-specific scoring modifiers — aggressive / cautious / defensive (`scoreDistanceByStyle`, `scoreStyleSpecific`)
+- [x] **6.3** `suggestMovement(...)` — enumerate → simulate → score → select; includes a **2-ply lookahead** projecting own and enemy future positions
+- [~] **6.4** Difficulty / randomness — _`selectPlan()` fully supports a `difficulty` param (random ↔ noisy ↔ best), but it is hardcoded to `1` at both call sites and there is **no UI control**._
 
 ---
 
 ## Phase 7 — Game Flow & UI
 
-- [ ] **7.1** Build a turn manager in the store:
-  - `currentPhase`: `setup | orders | reveal | resolve | game_over`
-  - `currentTurn`: number
-  - AI orders are computed silently during `orders` and stored hidden
-  - Action log: array of { turn, unitId, action, details }
-
-- [ ] **7.2** Build the main game screen:
-  - Top bar: turn number, phase indicator, wind direction (with compass icon)
-  - Left sidebar: unit list expandable with status icons, click to focus camera
-  - Centre: PixiJS canvas (table view)
-  - Bottom or right panel: selected unit info / actions
-
-- [ ] **7.3** Orders phase — player & AI plan simultaneously:
-  - Turn starts → AI silently computes all its unit movements (6.3) based on current board state
-  - Player sees "AI is thinking" briefly, then "Reveal AI orders" button appears
-  - Player clicks reveal → AI plans shown: ghost ships on canvas + a detailed order card per AI unit (exact breakdown per chunk: distance, turn direction + points, cumulative position/orientation)
-  - Player then declares their own units' movements (drag, position input, etc.)
-  - Player clicks "Resolve turn" → all movements apply simultaneously
-  - Status changes (grapple, immobilise, destroy, surrender) are applied before movement if relevant
-
-- [ ] **7.4** AI turn flow (internal, during orders phase):
-  - For each AI unit, compute movement suggestion (6.3) based on the board state at start of turn
-  - Store suggestions as hidden AI orders
-  - On reveal: show AI plans on canvas as preview, but do not apply yet
-  - On resolve: apply all AI and player movements together
-
-- [ ] **7.5** Game save / load:
-  - Auto-save to localStorage on every state change
-  - "Save as" / "Load" buttons with named save slots
-  - Export game state as JSON file (download or use the Web Share API's `navigator.share()` to share the file to another app)
-  - Import: file picker to load a saved JSON file
+- [x] **7.1** Turn manager in the store — phases `setup | orders | reveal | resolve | game_over`, `currentTurn`, hidden AI orders, `actionLog`
+- [x] **7.2** Main game screen (`GameView.tsx`) — top bar (turn / phase / wind), unit sidebar, Pixi canvas, selected-unit panel
+- [~] **7.3** Orders phase — _AI computes hidden orders; reveal shows ghost ships + order breakdown (`PlayerMovementPanel.tsx`); resolve applies simultaneously. Status changes (grapple/immobilise/destroy/surrender) are applied manually via the unit form rather than as an explicit pre-movement step._
+- [x] **7.4** AI turn flow — hidden orders computed on `startGame`/`resolveTurn`, previewed on reveal, applied on resolve
+- [~] **7.5** Game save / load — _manual save to localStorage works. **Missing: auto-save on change, JSON export/import, and `navigator.share()`.**_
 
 ---
 
-## Phase 8 — Firing & Combat (Stretch / Post-MVP)
+## Phase 8 — Firing & Combat
 
-- [ ] **8.1** Firing arc visualization:
-  - When a unit is selected, draw its firing arcs on the canvas (cone shapes from the unit)
-  - Colour arcs green if an enemy is in range, red otherwise
-
-- [ ] **8.2** Combat resolution:
-  - Manual: show which enemies are in firing arcs and let the player declare targets
-  - Automated (optional): AI selects best target within its arcs
+- [~] **8.1** Firing arc visualization — _the AI's chosen fire arc is drawn on reveal (`GameCanvas.tsx`). General "draw all of a selected unit's arcs, green if enemy in range / red otherwise" is not implemented._
+- [~] **8.2** Combat resolution — _AI fire-plan computation (`computeAIFirePlan`, `checkFiringArc` in `src/game/combat.ts`) chunk-simulates both ships to find the first firing solution. **No damage/destruction automation** — outcomes (destroy/surrender/immobilise) are applied manually._
 
 ---
 
 ## Phase 9 — Polish & Mobile Optimisation
 
-- [ ] **9.1** Touch interactions:
-  - Pinch-to-zoom on the canvas
-  - Tap to select, drag to move
-  - Long-press for context menu
-  - Ensure all buttons are large enough for finger taps (min 44x44px)
+- [~] **9.1** Touch interactions — _tap-to-select and drag-to-move work; **pinch-to-zoom and long-press context menu are not implemented**; verify 44×44px tap targets._
+- [~] **9.2** Responsive layout — _layout is responsive; portrait-stack / landscape-column / bottom-sheet behaviours not explicitly verified._
+- [ ] **9.3** Accessibility — high-contrast mode, screen-reader labels
+- [ ] **9.4** Performance — sprite batching, lazy terrain rendering, **debounced save**, and code-splitting the ~560 kB bundle
 
-- [ ] **9.2** Responsive layout:
-  - Portrait mode: sidebar stacks below canvas
-  - Landscape mode: sidebar is a narrow left column
-  - Bottom sheet panels for actions (slide up from bottom)
+---
 
-- [ ] **9.3** Accessibility:
-  - High-contrast mode for table / terrain
-  - Screen reader labels on interactive elements
+## Phase 10 — Remaining Work (consolidated backlog)
 
-- [ ] **9.4** Performance:
-  - PixiJS sprite batching for units
-  - Lazy terrain polygon rendering
-  - Debounce save to localStorage
+Ordered roughly by value-to-effort. Each item references the phase it completes.
+
+### Gameplay correctness
+- [ ] **10.1 Attitude scoring (6.1).** Reward ending on a fast point of sail so the AI uses the wind. Reintroduce an attitude-rank table and wire it into `evaluatePosition` (the `scoreAttitude()` stub currently returns 0). _Highest-value logic gap._
+- [ ] **10.2 Grapple relationship + link (4.4).** Add a "grappled-by" reference on `Unit`, draw a connecting line on the canvas between grappled units, and surface grapple in the unit panel.
+- [ ] **10.3 Aggressive grapple/boarding behaviour (CLAUDE.md spec).** Let an aggressive AI close to ≤20 mm to grapple, and take a boarding action when already grappled (today grappled units simply freeze — `suggestMovement` returns `null`).
+- [ ] **10.4 Per-attitude min speed (5.2).** Decide whether to extend `SpeedRange` to `{ min, max }` per attitude, or keep the simplified `prevMoveDistance/2` model and update CLAUDE.md/this plan to match. (Currently simplified.)
+
+### UI / flow
+- [ ] **10.5 Difficulty slider (6.4).** Expose the existing `difficulty` parameter as a UI control (per-game or per-unit) instead of the hardcoded `1`.
+- [ ] **10.6 Save/load completeness (7.5).** Debounced auto-save on state change; JSON export (download / `navigator.share()`); JSON import via file picker. Consider adding a `schemaVersion` field to saves (the loader already carries legacy-migration shims).
+- [ ] **10.7 Save-on-exit prompt (1.2).** "Save & Exit" / "Exit Without Saving" when `hasUnsavedChanges`.
+- [ ] **10.8 Pre-movement status step (7.3).** Optional explicit phase to apply grapple/immobilise/destroy/surrender before movement resolves.
+
+### Combat (stretch)
+- [ ] **10.9 Full firing-arc visualization (8.1).** When a unit is selected, draw all its arcs, coloured by whether an enemy is in range.
+- [ ] **10.10 Combat resolution (8.2).** Optional automated damage/target selection feeding status changes.
+
+### Polish / mobile (9.x)
+- [ ] **10.11 Pinch-to-zoom & long-press context menu (9.1).**
+- [ ] **10.12 Responsive portrait/landscape + bottom-sheet panels (9.2).**
+- [ ] **10.13 Accessibility (9.3)** — high-contrast mode, ARIA labels.
+- [ ] **10.14 Performance (9.4)** — code-split the ~560 kB bundle, sprite batching, lazy terrain rendering, debounced save.
+
+### Code health
+- [ ] **10.15 De-duplicate geometry helpers.** `distance`, `headingDeg`, `angleBetweenPoints`, `relativeAngle`, `inArc`, and the bow/stern raking arcs are duplicated across `ai.ts` and `combat.ts` — extract to `src/utils/geometry.ts`, and reuse `arcSideToAngles` instead of inline magic angles.
+- [ ] **10.16 Tests.** Add a small Vitest suite for the pure logic (`movement.ts`, `attitude.ts`, `ai.ts`), especially attitude wrap-around, in-irons handling, and `distanceTraveled` clamping. (The old ad-hoc `debug_ai.ts` / `test_defensive.ts` scratch scripts were removed.)
 
 ---
 
 ## Dependency Graph (Parallel Tracks)
 
 ```
-Phase 0 (Scaffolding)
+Phase 0 (Scaffolding) ✅
     │
-    ├──► Phase 1 (Main Menu)
+    ├──► Phase 1 (Main Menu) ✅
     │
-    ├──► Phase 2 (Data Model)
+    ├──► Phase 2 (Data Model) ✅
     │        │
-    │        ├──► Phase 3 (Table Setup) ——► Phase 4 (Units) ——► Phase 7 (Game Flow)
+    │        ├──► Phase 3 (Table Setup) ✅ ──► Phase 4 (Units) ✅~ ──► Phase 7 (Game Flow) ✅~
     │        │
-    │        └──► Phase 5 (Movement Logic) ——► Phase 6 (AI) ——► Phase 7
+    │        └──► Phase 5 (Movement) ✅ ──► Phase 6 (AI) ✅~ ──► Phase 7
     │                                                        │
-    Phase 8 (Combat) ◄───────────────────────────────────────┘
+    Phase 8 (Combat) ◄───────────────────────────────────────┘  (partial)
     │
-    Phase 9 (Polish) ——► Done
+    Phase 9 (Polish) — in progress
 ```
 
-- **Track A** (UI-heavy): Phase 0 → 1 → 2 → 3 → 4 → 7
-- **Track B** (Logic-heavy): Phase 0 → 2 → 5 → 6 → 7
-- Phases 8 and 9 are optional / additive once the core loop works.
-
-The two tracks can be worked on in parallel by different people after Phase 2 is complete. The game store is the shared interface.
+- **Track A** (UI-heavy): Phase 0 → 1 → 2 → 3 → 4 → 7  — _done; remaining polish in Phase 10._
+- **Track B** (Logic-heavy): Phase 0 → 2 → 5 → 6 → 7  — _done; key gap is attitude scoring (10.1)._
 
 ---
 
-## First Milestone: "Main Menu"
+## Milestones
 
-Goal: App loads to a main menu listing saved games, with new game / load / delete.
-
-Covers: 0.1–0.4, 1.1–1.3, 2.1.
-
-## Second Milestone: "Hello, Table"
-
-Goal: Create a new game, set up table dimensions and wind, place terrain polygons on a canvas.
-
-Covers: 3.1, 3.3, 3.4.
-
-## Third Milestone: "Units on the Board"
-
-Goal: Place units on the table, change their orientation, see them rendered as ship icons.
-
-Covers: 2.2, 4.1–4.3.
-
-## Fourth Milestone: "Moving Ships"
-
-Goal: AI can suggest a valid movement for a unit, preview it, and apply it.
-
-Covers: 5.1–5.7, 6.1–6.3, 7.2–7.4.
-
-## Fifth Milestone: "Full Game Loop"
-
-Goal: Complete game flow with turns, status changes, save/load (7.5), and all AI styles working correctly.
-
-Covers: 7.1, 7.5, remaining 4.4, 6.4.
-
-## Sixth Milestone: "Production Quality"
-
-Goal: Polish for tablet usage, touch interactions, performance optimisation.
-
-Covers: 9.1–9.4, and optionally Phase 8.
+| # | Goal | Covers | Status |
+|---|------|--------|--------|
+| 1 — Main Menu | Menu lists saves; new/load/delete | 0.1–0.4, 1.1–1.3, 2.1 | ✅ |
+| 2 — Hello, Table | Dimensions, wind, terrain polygons on canvas | 3.1, 3.3, 3.4 | ✅ |
+| 3 — Units on the Board | Place units, orient, render as ships | 2.2, 4.1–4.3 | ✅ |
+| 4 — Moving Ships | AI suggests, previews, applies a valid move | 5.1–5.7, 6.1–6.3, 7.2–7.4 | ✅ (attitude scoring 10.1 outstanding) |
+| 5 — Full Game Loop | Turns, status changes, save/load, all styles | 7.1, 7.5, 4.4, 6.4 | 🟡 export/import + auto-save (10.6), difficulty UI (10.5), grapple (10.2–10.3) |
+| 6 — Production Quality | Tablet polish, touch, performance | 9.1–9.4, Phase 8 | 🟡 see 10.9–10.14 |
