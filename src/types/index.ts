@@ -118,6 +118,7 @@ export interface GameState {
   name: string
   createdAt: string
   updatedAt: string
+  schemaVersion: number
   tableWidth: number
   tableHeight: number
   windDirection: number

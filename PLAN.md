@@ -126,7 +126,7 @@ Ordered roughly by value-to-effort. Each item references the phase it completes.
 
 ### UI / flow
 - [ ] **10.5 Difficulty slider (6.4).** Expose the existing `difficulty` parameter as a UI control (per-game or per-unit) instead of the hardcoded `1`.
-- [ ] **10.6 Save/load completeness (7.5).** Debounced auto-save on state change; JSON export (download / `navigator.share()`); JSON import via file picker. Consider adding a `schemaVersion` field to saves (the loader already carries legacy-migration shims).
+- [~] **10.6 Save/load completeness (7.5).** Debounced auto-save on state change; JSON export (download / `navigator.share()`); JSON import via file picker. _Done: saves now carry a `schemaVersion` and all legacy-format normalisation is centralised in `src/stores/migrations.ts` (`migrateSavedGame` + `CURRENT_SCHEMA_VERSION`). Still open: auto-save, export, import._
 - [ ] **10.7 Save-on-exit prompt (1.2).** "Save & Exit" / "Exit Without Saving" when `hasUnsavedChanges`.
 - [ ] **10.8 Pre-movement status step (7.3).** Optional explicit phase to apply grapple/immobilise/destroy/surrender before movement resolves.
 

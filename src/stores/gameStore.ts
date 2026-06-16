@@ -6,6 +6,7 @@ import { applyMovementPlan } from '../game/movement'
 import { suggestMovement } from '../game/ai'
 import { computeAIFirePlan } from '../game/combat'
 import { computeAttitude } from '../utils/attitude'
+import { migrateSavedGame, CURRENT_SCHEMA_VERSION } from './migrations'
 
 interface GameStore {
   savedGames: SavedGame[]
@@ -51,6 +52,7 @@ function createInitialGame(name: string, defaultWidth: number, defaultHeight: nu
     name,
     createdAt: timestamp,
     updatedAt: timestamp,
+    schemaVersion: CURRENT_SCHEMA_VERSION,
     tableWidth: defaultWidth,
     tableHeight: defaultHeight,
     windDirection: 0,
@@ -88,37 +90,7 @@ export const useGameStore = create<GameStore>()(
       loadGame: (id) => {
         const stored = localStorage.getItem(`game-${id}`)
         if (stored) {
-          const raw = JSON.parse(stored)
-          const game: GameState = {
-            id: raw.id,
-            name: raw.name,
-            createdAt: raw.createdAt,
-            updatedAt: raw.updatedAt,
-            tableWidth: raw.tableWidth ?? raw.settings?.tableWidth ?? 1200,
-            tableHeight: raw.tableHeight ?? raw.settings?.tableHeight ?? 900,
-            windDirection: raw.windDirection ?? raw.settings?.windDirection ?? 0,
-            terrain: raw.terrain ?? [],
-            units: (raw.units ?? []).map((u: Record<string, unknown>) => ({
-              ...u,
-              prevAttitude: u.prevAttitude ?? 'reaching',
-              prevMoveDistance: u.prevMoveDistance ?? 0,
-              hiddenAIOrder: u.hiddenAIOrder ?? null,
-              playerOrder: u.playerOrder ?? null,
-              driftSpeed: u.driftSpeed ?? 10,
-              lastFireChunk: u.lastFireChunk ?? null,
-              hiddenAIFirePlan: u.hiddenAIFirePlan ?? null,
-              firingArcs: ((u.firingArcs ?? []) as Record<string, unknown>[]).map((a) => ({
-                id: String(a.id ?? ''),
-                side: (a.side as 'bow' | 'stern' | 'port' | 'starboard') ?? 'starboard',
-                maxRange: Number(a.maxRange ?? 300),
-                weapons: Number(a.weapons ?? 10),
-              })),
-            })),
-            currentTurn: raw.currentTurn ?? 1,
-            currentPhase: raw.currentPhase ?? 'setup',
-            actionLog: raw.actionLog ?? [],
-            backgroundImage: raw.backgroundImage,
-          }
+          const game = migrateSavedGame(JSON.parse(stored))
           set({ currentGame: game, hasUnsavedChanges: false })
         }
       },
