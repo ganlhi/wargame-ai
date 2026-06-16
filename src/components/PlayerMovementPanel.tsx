@@ -81,7 +81,7 @@ export function PlayerMovementPanel({ unit }: Props) {
   const planString = existingOrder
     ? existingOrder.chunks
         .map(
-          (c, i) =>
+          (c) =>
             `${Math.round(c.distance)}mm${c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}`,
         )
         .join(' → ')

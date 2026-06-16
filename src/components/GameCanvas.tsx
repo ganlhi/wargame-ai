@@ -59,6 +59,8 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const backgroundGenRef = useRef(0)
   const handleDragRef = useRef<(sx: number, sy: number) => void>(() => {})
+  const handleMoveDragRef = useRef<(sx: number, sy: number) => void>(() => {})
+  const handleEditDragRef = useRef<(sx: number, sy: number) => void>(() => {})
   const moveDragStart = useRef<{ tableX: number; tableY: number } | null>(null)
   const moveOrigVerts = useRef<{ x: number; y: number }[]>([])
   const editDragIdx = useRef<number | null>(null)
@@ -224,7 +226,6 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
         setSelectedTerrainId(terrainId)
         setMenuPos({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })
         setSelectedUnitId(null)
-        setUnitMenuPos(null)
       })
       tc.addChild(g)
     }
@@ -481,7 +482,7 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
       const firePlan = selectedUnit.hiddenAIFirePlan
 
       if (plan && firePlan) {
-        let pos = { ...selectedUnit.position }
+        const pos = { ...selectedUnit.position }
         let orient = selectedUnit.orientation
         for (let ci = 0; ci <= firePlan.chunkIndex && ci < plan.chunks.length; ci++) {
           const chunk = plan.chunks[ci]
@@ -539,7 +540,6 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
           border.stroke({ color, width: 1, alpha: 0.5 })
           oc.addChild(border)
 
-          const arcSteps = 24
           const arcG = new Graphics()
           const aStart = toScreenAngle(worldMin)
           const aEnd = toScreenAngle(worldMax)
@@ -669,9 +669,7 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
     [currentGame, editTerrainId]
   )
 
-  const handleMoveDragRef = useRef(handleMoveDrag)
   useEffect(() => { handleMoveDragRef.current = handleMoveDrag }, [handleMoveDrag])
-  const handleEditDragRef = useRef(handleEditDrag)
   useEffect(() => { handleEditDragRef.current = handleEditDrag }, [handleEditDrag])
   useEffect(() => { handleDragRef.current = handleDrag }, [handleDrag])
   useEffect(() => { renderBackgroundRef.current = renderBackground }, [renderBackground])
@@ -747,7 +745,6 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
           setSelectedTerrainId(null)
           setMenuPos(null)
           setSelectedUnitId(null)
-          setUnitMenuPos(null)
           setMoveTerrainId(null)
           setMoveVertices([])
           setEditTerrainId(null)

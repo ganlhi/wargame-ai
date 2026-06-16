@@ -385,7 +385,7 @@ export const useGameStore = create<GameStore>()(
         const game = get().currentGame
         if (!game || game.currentPhase !== 'reveal') return
 
-        let units = [...game.units]
+        const units = [...game.units]
 
         for (let i = 0; i < units.length; i++) {
           const u = units[i]

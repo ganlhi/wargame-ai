@@ -12,14 +12,6 @@ const BOUNDARY_PENALTY = -5000
 const FUTURE_BOUNDARY_PENALTY = -3000
 const LOOKAHEAD_DISCOUNT = 0.5
 
-const ATTITUDE_ORDER: Record<Attitude, number> = {
-  quarter_reaching: 5,
-  running: 4,
-  reaching: 3,
-  beating: 2,
-  in_irons: 1,
-}
-
 function getEnemyMaxRange(enemy: Unit): number {
   return Math.max(...enemy.firingArcs.map((a) => a.maxRange), 0)
 }
@@ -170,7 +162,7 @@ function minEdgeDistance(pos: { x: number; y: number }, terrain: TableTerrain[])
   return minDist
 }
 
-function scoreAttitude(_attitude: Attitude): number {
+function scoreAttitude(): number {
   return 0
 }
 
@@ -360,7 +352,7 @@ export function evaluatePosition(
 ): number {
   let score = 0
 
-  score += scoreAttitude(unit.attitude)
+  score += scoreAttitude()
   score += scoreFiring(unit, enemies)
   score += scoreDistanceByStyle(unit, enemies)
   score += scoreStyleSpecific(unit, enemies)

@@ -1,4 +1,4 @@
-import type { Unit, MovementPlan, ArcSide } from '../types'
+import type { Unit, ArcSide } from '../types'
 import { arcSideToAngles } from '../types'
 
 function distance(a: { x: number; y: number }, b: { x: number; y: number }): number {
