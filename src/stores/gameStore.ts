@@ -395,7 +395,6 @@ export const useGameStore = create<GameStore>()(
           const result = applyMovementPlan(u, plan, game.windDirection, game.tableWidth, game.tableHeight)
           const drift = result.isInIrons ? ` (drifted ${u.driftSpeed}mm per chunk)` : ''
           const boundary = result.hitBoundary ? ' [hit table edge]' : ''
-          const totalDist = plan.chunks.reduce((s, c) => s + c.distance, 0)
           get().addLogEntry({
             turn: game.currentTurn,
             unitId: u.id,
@@ -408,7 +407,7 @@ export const useGameStore = create<GameStore>()(
             orientation: result.orientation,
             attitude: result.attitude,
             prevAttitude: u.attitude,
-            prevMoveDistance: totalDist,
+            prevMoveDistance: result.distanceTraveled,
             isInIrons: result.isInIrons,
             hiddenAIOrder: null,
             playerOrder: null,

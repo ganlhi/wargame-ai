@@ -71,11 +71,14 @@ export function applyMovementPlan(
   attitude: Attitude
   isInIrons: boolean
   hitBoundary: boolean
+  distanceTraveled: number
   path: { x: number; y: number }[]
 } {
   let { x, y } = unit.position
   let orientation = unit.orientation
   let isInIrons = unit.isInIrons
+  let hitBoundary = false
+  let distanceTraveled = 0
   const path = [{ x, y }]
 
   for (const chunk of plan.chunks) {
@@ -86,8 +89,16 @@ export function applyMovementPlan(
       y += Math.sin(driftAngle) * (unit.driftSpeed ?? 10)
     } else {
       const vec = orientationToVector(orientation)
-      x += vec.dx * chunk.distance
-      y += vec.dy * chunk.distance
+      const nextX = x + vec.dx * chunk.distance
+      const nextY = y + vec.dy * chunk.distance
+      const clampedX = Math.max(0, Math.min(tableWidth, nextX))
+      const clampedY = Math.max(0, Math.min(tableHeight, nextY))
+      if (clampedX !== nextX || clampedY !== nextY) hitBoundary = true
+      // Count only the distance actually covered after clamping to the table,
+      // so a ship stopped by the edge doesn't inflate next turn's minimum move.
+      distanceTraveled += Math.hypot(clampedX - x, clampedY - y)
+      x = clampedX
+      y = clampedY
     }
 
     path.push({ x, y })
@@ -109,9 +120,11 @@ export function applyMovementPlan(
     }
   }
 
+  // Forward movement is already clamped per chunk; this only catches in-irons
+  // drift pushing the ship off the table.
   const clampedX = Math.max(0, Math.min(tableWidth, x))
   const clampedY = Math.max(0, Math.min(tableHeight, y))
-  const hitBoundary = clampedX !== x || clampedY !== y
+  if (clampedX !== x || clampedY !== y) hitBoundary = true
 
   const attitude = computeAttitude(windAngle, orientation)
 
@@ -125,6 +138,7 @@ export function applyMovementPlan(
     attitude,
     isInIrons,
     hitBoundary,
+    distanceTraveled: Math.round(distanceTraveled),
     path: path.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
   }
 }
