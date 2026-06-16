@@ -4,6 +4,7 @@ import { TableSetup } from './TableSetup'
 import { PhotoCapture } from './PhotoCapture'
 import { GameCanvas } from './GameCanvas'
 import { UnitFormModal } from './UnitFormModal'
+import { PlayerMovementPanel } from './PlayerMovementPanel'
 import { COMPASS_LABELS } from '../utils/attitude'
 import { suggestMovement } from '../game/ai'
 import type { Unit } from '../types'
@@ -252,34 +253,46 @@ export function GameView() {
           </div>
         )}
 
-        {currentGame.currentPhase === 'reveal' && currentGame.units.filter(u => u.side === 'ai' && u.status === 'active').length > 0 && (
-          <div className="absolute right-2 top-2 bottom-2 w-64 flex flex-col gap-2 pointer-events-none">
-            {currentGame.units.filter(u => u.side === 'ai' && u.status === 'active').map(aiUnit => (
-              <div
-                key={aiUnit.id}
-                className="bg-gray-900/90 border border-gray-700 rounded-lg p-3 pointer-events-auto backdrop-blur-sm cursor-pointer"
-                onClick={() => setExpandedAIUnit(expandedAIUnit === aiUnit.id ? null : aiUnit.id)}
-              >
-                <div className="flex items-center justify-between">
-                  <span className="text-sm font-medium text-white">{aiUnit.name}</span>
-                  <span className={`text-xs px-1.5 py-0.5 rounded ${aiUnit.aiStyle === 'aggressive' ? 'bg-red-900/50 text-red-300' : aiUnit.aiStyle === 'cautious' ? 'bg-yellow-900/50 text-yellow-300' : 'bg-blue-900/50 text-blue-300'}`}>
-                    {aiUnit.aiStyle}
-                  </span>
-                </div>
-                {expandedAIUnit === aiUnit.id && aiUnit.hiddenAIOrder && (
-                  <div className="mt-2 text-xs text-gray-400 space-y-1">
-                    <p>Total turn pts: {aiUnit.hiddenAIOrder.totalTurnPoints}</p>
-                    <p>Effective max: {Math.round(aiUnit.hiddenAIOrder.effectiveMaxSpeed)}mm</p>
-                    <p className="text-gray-500">Chunks: {aiUnit.hiddenAIOrder.chunks.map((c, i) => (
-                      <span key={i}>
-                        {i > 0 && ' → '}
-                        {Math.round(c.distance)}mm{c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}
-                      </span>
-                    ))}</p>
-                  </div>
-                )}
-              </div>
+        {(currentGame.currentPhase === 'orders' || currentGame.currentPhase === 'reveal') && (
+          (currentGame.currentPhase === 'orders' ? currentGame.units.some(u => u.side === 'player' && u.status === 'active') : currentGame.units.some(u => u.status === 'active'))
+        ) && (
+          <div className="absolute right-2 top-2 bottom-2 w-64 flex flex-col gap-2 pointer-events-none overflow-y-auto">
+            {currentGame.currentPhase === 'orders' && currentGame.units.filter(u => u.side === 'player' && u.status === 'active').map(playerUnit => (
+              <PlayerMovementPanel key={playerUnit.id} unit={playerUnit} />
             ))}
+            {currentGame.currentPhase === 'reveal' && (
+              <>
+                {currentGame.units.filter(u => u.side === 'player' && u.status === 'active' && u.playerOrder).map(playerUnit => (
+                  <PlayerMovementPanel key={playerUnit.id} unit={playerUnit} />
+                ))}
+                {currentGame.units.filter(u => u.side === 'ai' && u.status === 'active').map(aiUnit => (
+                  <div
+                    key={aiUnit.id}
+                    className="bg-gray-900/90 border border-gray-700 rounded-lg p-3 pointer-events-auto backdrop-blur-sm cursor-pointer"
+                    onClick={() => setExpandedAIUnit(expandedAIUnit === aiUnit.id ? null : aiUnit.id)}
+                  >
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm font-medium text-white">{aiUnit.name}</span>
+                      <span className={`text-xs px-1.5 py-0.5 rounded ${aiUnit.aiStyle === 'aggressive' ? 'bg-red-900/50 text-red-300' : aiUnit.aiStyle === 'cautious' ? 'bg-yellow-900/50 text-yellow-300' : 'bg-blue-900/50 text-blue-300'}`}>
+                        {aiUnit.aiStyle}
+                      </span>
+                    </div>
+                    {expandedAIUnit === aiUnit.id && aiUnit.hiddenAIOrder && (
+                      <div className="mt-2 text-xs text-gray-400 space-y-1">
+                        <p>Total turn pts: {aiUnit.hiddenAIOrder.totalTurnPoints}</p>
+                        <p>Effective max: {Math.round(aiUnit.hiddenAIOrder.effectiveMaxSpeed)}mm</p>
+                        <p className="text-gray-500">Chunks: {aiUnit.hiddenAIOrder.chunks.map((c, i) => (
+                          <span key={i}>
+                            {i > 0 && ' → '}
+                            {Math.round(c.distance)}mm{c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}
+                          </span>
+                        ))}</p>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </>
+            )}
           </div>
         )}
 

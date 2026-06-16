@@ -1,7 +1,7 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { v4 as uuid } from 'uuid'
-import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry } from '../types'
+import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry, MovementPlan } from '../types'
 import { applyMovementPlan } from '../game/movement'
 import { suggestMovement } from '../game/ai'
 import { computeAttitude } from '../utils/attitude'
@@ -37,6 +37,7 @@ interface GameStore {
   startGame: () => void
   revealOrders: () => void
   resolveTurn: () => void
+  setPlayerOrder: (id: string, plan: MovementPlan | null) => void
 }
 
 const now = () => new Date().toISOString()
@@ -100,6 +101,7 @@ export const useGameStore = create<GameStore>()(
               ...u,
               prevAttitude: u.prevAttitude ?? 'reaching',
               hiddenAIOrder: u.hiddenAIOrder ?? null,
+              playerOrder: u.playerOrder ?? null,
               driftSpeed: u.driftSpeed ?? 10,
               firingArcs: ((u.firingArcs ?? []) as Record<string, unknown>[]).map((a) =>
                 a.side ? a : { id: String(a.id ?? ''), side: 'starboard' as const, maxRange: Number(a.maxRange ?? 300) }
@@ -351,6 +353,19 @@ export const useGameStore = create<GameStore>()(
         })
       },
 
+      setPlayerOrder: (id: string, plan: MovementPlan | null) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: {
+            ...game,
+            units: game.units.map((u) => (u.id === id ? { ...u, playerOrder: plan } : u)),
+            updatedAt: now(),
+          },
+          hasUnsavedChanges: true,
+        })
+      },
+
       resolveTurn: () => {
         const game = get().currentGame
         if (!game || game.currentPhase !== 'reveal') return
@@ -359,17 +374,17 @@ export const useGameStore = create<GameStore>()(
 
         for (let i = 0; i < units.length; i++) {
           const u = units[i]
-          if (!u.hiddenAIOrder) continue
+          const plan = u.side === 'ai' ? u.hiddenAIOrder : u.playerOrder
+          if (!plan) continue
 
-          const result = applyMovementPlan(u, u.hiddenAIOrder, game.windDirection, game.tableWidth, game.tableHeight)
+          const result = applyMovementPlan(u, plan, game.windDirection, game.tableWidth, game.tableHeight)
           const drift = result.isInIrons ? ` (drifted ${u.driftSpeed}mm per chunk)` : ''
           const boundary = result.hitBoundary ? ' [hit table edge]' : ''
-          const sideTag = u.side === 'ai' ? '' : ' (player)'
           get().addLogEntry({
             turn: game.currentTurn,
             unitId: u.id,
             unitName: u.name,
-            text: `${u.name} moved to (${Math.round(result.position.x)}, ${Math.round(result.position.y)}) heading ${result.orientation}pts${drift}${boundary}${sideTag}`,
+            text: `${u.name} moved to (${Math.round(result.position.x)}, ${Math.round(result.position.y)}) heading ${result.orientation}pts${drift}${boundary}`,
           })
           units[i] = {
             ...u,
@@ -379,6 +394,7 @@ export const useGameStore = create<GameStore>()(
             prevAttitude: u.attitude,
             isInIrons: result.isInIrons,
             hiddenAIOrder: null,
+            playerOrder: null,
           }
         }
 

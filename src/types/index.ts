@@ -87,6 +87,7 @@ export interface Unit {
   isInIrons: boolean
   prevAttitude: Attitude
   hiddenAIOrder: MovementPlan | null
+  playerOrder: MovementPlan | null
 }
 
 export interface MoveChunk {
