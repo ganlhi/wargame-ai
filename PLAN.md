@@ -81,7 +81,7 @@
 
 ## Phase 6 — AI Decision System (`src/game/ai.ts`)
 
-- [~] **6.1** `evaluatePosition(...)` — distance-to-enemy, broadside/raking arcs, firing range, edge penalty, terrain proximity, enemy-broadside danger. _Gap: **attitude is not scored** — `scoreAttitude()` is a `return 0` stub, so the AI gets no reward for ending on a fast point of sail._
+- [x] **6.1** `evaluatePosition(...)` — distance-to-enemy, broadside/raking arcs, firing range, edge penalty, terrain proximity, enemy-broadside danger, **and attitude** (`scoreAttitude`, see 10.1).
 - [x] **6.2** Style-specific scoring modifiers — aggressive / cautious / defensive (`scoreDistanceByStyle`, `scoreStyleSpecific`)
 - [x] **6.3** `suggestMovement(...)` — enumerate → simulate → score → select; includes a **2-ply lookahead** projecting own and enemy future positions
 - [~] **6.4** Difficulty / randomness — _`selectPlan()` fully supports a `difficulty` param (random ↔ noisy ↔ best), but it is hardcoded to `1` at both call sites and there is **no UI control**._
@@ -119,7 +119,7 @@
 Ordered roughly by value-to-effort. Each item references the phase it completes.
 
 ### Gameplay correctness
-- [ ] **10.1 Attitude scoring (6.1).** Reward ending on a fast point of sail so the AI uses the wind. Reintroduce an attitude-rank table and wire it into `evaluatePosition` (the `scoreAttitude()` stub currently returns 0). _Highest-value logic gap._
+- [x] **10.1 Attitude scoring (6.1).** `scoreAttitude(unit)` now rewards ending on a fast point of sail, derived from the ship's own `speedProfile` (normalised to its best attitude) with the canonical `quarter_reaching > running > reaching > beating > in_irons` order as a flat-profile fallback, and wired into `evaluatePosition`. The reward is deliberately small (`ATTITUDE_WEIGHT = 20`) so it only breaks ties in favour of speed — a slower end-of-turn attitude can still win when it sets up a better position next turn (carried by the positional scores + 2-ply lookahead), including deliberately turning into irons to switch tack.
 - [ ] **10.2 Grapple relationship + link (4.4).** Add a "grappled-by" reference on `Unit`, draw a connecting line on the canvas between grappled units, and surface grapple in the unit panel.
 - [ ] **10.3 Aggressive grapple/boarding behaviour (CLAUDE.md spec).** Let an aggressive AI close to ≤20 mm to grapple, and take a boarding action when already grappled (today grappled units simply freeze — `suggestMovement` returns `null`).
 - [ ] **10.4 Per-attitude min speed (5.2).** Decide whether to extend `SpeedRange` to `{ min, max }` per attitude, or keep the simplified `prevMoveDistance/2` model and update CLAUDE.md/this plan to match. (Currently simplified.)
@@ -165,7 +165,7 @@ Phase 0 (Scaffolding) ✅
 ```
 
 - **Track A** (UI-heavy): Phase 0 → 1 → 2 → 3 → 4 → 7  — _done; remaining polish in Phase 10._
-- **Track B** (Logic-heavy): Phase 0 → 2 → 5 → 6 → 7  — _done; key gap is attitude scoring (10.1)._
+- **Track B** (Logic-heavy): Phase 0 → 2 → 5 → 6 → 7  — _done._
 
 ---
 
@@ -176,6 +176,6 @@ Phase 0 (Scaffolding) ✅
 | 1 — Main Menu | Menu lists saves; new/load/delete | 0.1–0.4, 1.1–1.3, 2.1 | ✅ |
 | 2 — Hello, Table | Dimensions, wind, terrain polygons on canvas | 3.1, 3.3, 3.4 | ✅ |
 | 3 — Units on the Board | Place units, orient, render as ships | 2.2, 4.1–4.3 | ✅ |
-| 4 — Moving Ships | AI suggests, previews, applies a valid move | 5.1–5.7, 6.1–6.3, 7.2–7.4 | ✅ (attitude scoring 10.1 outstanding) |
+| 4 — Moving Ships | AI suggests, previews, applies a valid move | 5.1–5.7, 6.1–6.3, 7.2–7.4 | ✅ |
 | 5 — Full Game Loop | Turns, status changes, save/load, all styles | 7.1, 7.5, 4.4, 6.4 | 🟡 export/import + auto-save (10.6), difficulty UI (10.5), grapple (10.2–10.3) |
 | 6 — Production Quality | Tablet polish, touch, performance | 9.1–9.4, Phase 8 | 🟡 see 10.9–10.14 |

@@ -135,8 +135,36 @@ function minEdgeDistance(pos: { x: number; y: number }, terrain: TableTerrain[])
   return minDist
 }
 
-function scoreAttitude(): number {
-  return 0
+// Reward ending the turn on a fast point of sail so the AI actually exploits
+// the wind. The reward is deliberately modest (ATTITUDE_WEIGHT is small next to
+// the firing/distance/positional terms): being on a slower attitude at the end
+// of a turn can still be worth it if it sets up a stronger position in the turns
+// that follow — including deliberately turning into irons to switch tack. That
+// longer-term payoff is carried by the positional scores and the 2-ply
+// lookahead, so this term only needs to break ties in favour of speed, not
+// override repositioning.
+const ATTITUDE_WEIGHT = 20
+
+// Canonical best-to-worst ordering from CLAUDE.md, used only when a ship's
+// speed profile is flat (no information to rank attitudes by).
+const DEFAULT_ATTITUDE_RANK: Record<Attitude, number> = {
+  quarter_reaching: 1,
+  running: 0.75,
+  reaching: 0.5,
+  beating: 0.25,
+  in_irons: 0,
+}
+
+function scoreAttitude(unit: Unit): number {
+  const speeds = Object.values(unit.speedProfile).map((r) => r.max)
+  const maxSpeed = Math.max(...speeds, 0)
+  // Normalise to the ship's own best point of sail so the weight is comparable
+  // across ships with different absolute speeds.
+  const rank =
+    maxSpeed > 0
+      ? unit.speedProfile[unit.attitude].max / maxSpeed
+      : DEFAULT_ATTITUDE_RANK[unit.attitude]
+  return ATTITUDE_WEIGHT * rank
 }
 
 function scoreFiring(unit: Unit, enemies: Unit[]): number {
@@ -325,7 +353,7 @@ export function evaluatePosition(
 ): number {
   let score = 0
 
-  score += scoreAttitude()
+  score += scoreAttitude(unit)
   score += scoreFiring(unit, enemies)
   score += scoreDistanceByStyle(unit, enemies)
   score += scoreStyleSpecific(unit, enemies)

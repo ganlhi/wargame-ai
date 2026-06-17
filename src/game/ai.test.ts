@@ -55,6 +55,37 @@ describe('evaluatePosition', () => {
     const sFar = evaluatePosition(far, [enemy], [], 1000, 1000)
     expect(sFar).toBeGreaterThan(sNear)
   })
+
+  it('rewards a faster point of sail, all else equal', () => {
+    // Same position/heading/enemies — only the end-of-turn attitude differs.
+    const fast = makeUnit({ attitude: 'quarter_reaching' })
+    const slow = makeUnit({ attitude: 'beating' })
+    const sFast = evaluatePosition(fast, [], [], 1000, 1000)
+    const sSlow = evaluatePosition(slow, [], [], 1000, 1000)
+    expect(sFast).toBeGreaterThan(sSlow)
+    // In irons (no headway) is the worst attitude to end on.
+    const irons = makeUnit({ attitude: 'in_irons' })
+    expect(evaluatePosition(irons, [], [], 1000, 1000)).toBeLessThan(sSlow)
+  })
+
+  it('does not let attitude override a clearly better position', () => {
+    // A slow attitude in a strong firing position must still beat a fast
+    // attitude with no firing solution — attitude only breaks ties.
+    const inPosition = makeUnit({
+      attitude: 'beating',
+      position: { x: 500, y: 460 },
+      orientation: 0,
+      firingArcs: [STARBOARD_ARC],
+    })
+    const fastButIdle = makeUnit({
+      attitude: 'quarter_reaching',
+      position: { x: 500, y: 150 },
+      firingArcs: [STARBOARD_ARC],
+    })
+    const sIn = evaluatePosition(inPosition, [enemy], [], 1000, 1000)
+    const sIdle = evaluatePosition(fastButIdle, [enemy], [], 1000, 1000)
+    expect(sIn).toBeGreaterThan(sIdle)
+  })
 })
 
 describe('suggestMovement', () => {
