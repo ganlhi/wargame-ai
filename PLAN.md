@@ -42,7 +42,7 @@
 
 - [~] **2.1** TypeScript interfaces in `src/types/` — _all core types exist (`TableTerrain`, `Attitude`, `UnitStatus`, `AIStyle`, `MoveChunk`, `MovementPlan`, `Unit`, `GameState`, `ActionLogEntry`, `FirePlan`). Deviations from the original sketch:_
   - `FiringArc` is `{ side: bow|stern|port|starboard, maxRange, weapons }` — **not** free min/max angle. Arc angles are derived from `side` via `arcSideToAngles()`.
-  - `SpeedRange` is `{ max }` only — **no per-attitude `min`** (see 5.2).
+  - `SpeedRange` is `{ max }` per attitude; the per-turn minimum is `prevMoveDistance/2` per the game rule (see 5.2 / 10.4), not a static per-attitude `min`.
   - `Unit` carries extra runtime fields not in the sketch: `driftSpeed`, `isInIrons`, `prevAttitude`, `prevMoveDistance`, `hiddenAIOrder`, `playerOrder`, `lastFireChunk`, `hiddenAIFirePlan`.
   - `WindDirection` is a plain `number` (0–31) on `GameState.windDirection`, not a named type.
 - [x] **2.2** Zustand store (`useGameStore`) — CRUD for units/terrain, wind get/set, turn management, `persist`
@@ -70,7 +70,7 @@
 ## Phase 5 — Core Movement Logic (`src/game/movement.ts`, `src/utils/attitude.ts`)
 
 - [x] **5.1** `computeAttitude(windDirection, orientation)` — modulo wrap-around, points-from-bow mapping
-- [~] **5.2** `getSpeedRangeForAttitude(...)` — _implemented, but `SpeedRange` is `{ max }` only; no `min` per attitude. The minimum move each turn is derived purely from `prevMoveDistance / 2`._
+- [x] **5.2** `getSpeedRangeForAttitude(...)` — _`SpeedRange` is `{ max }` per attitude; the minimum move each turn is `prevMoveDistance / 2`, which is the actual game rule (not a simplification — see 10.4)._
 - [x] **5.3** `computeEffectiveMaxSpeed(baseMaxSpeed, turnPoints)` — 5% penalty per turn point
 - [x] **5.4** `splitMovement(distance)` — 5 whole chunks, larger first
 - [x] **5.5** `applyMovementPlan(...)` — walks 5 chunks, per-chunk edge clamping, returns position/orientation/attitude/isInIrons/hitBoundary/**distanceTraveled**/path
@@ -123,7 +123,7 @@ Ordered roughly by value-to-effort. Each item references the phase it completes.
 - [x] **10.1 Attitude scoring (6.1).** `scoreAttitude(unit)` now rewards ending on a fast point of sail, derived from the ship's own `speedProfile` (normalised to its best attitude) with the canonical `quarter_reaching > running > reaching > beating > in_irons` order as a flat-profile fallback, and wired into `evaluatePosition`. The reward is deliberately small (`ATTITUDE_WEIGHT = 20`) so it only breaks ties in favour of speed — a slower end-of-turn attitude can still win when it sets up a better position next turn (carried by the positional scores + 2-ply lookahead), including deliberately turning into irons to switch tack.
 - [x] **10.2 Grapple relationship + link (4.4).** `Unit` carries a mutual `grappledWith: string | null` (defaulted by `migrateSavedGame`, `schemaVersion` 3). The pure helpers in `src/game/grapple.ts` (`applyGrapple` / `clearGrappleForRemoved`) keep both sides + statuses in sync — detaching a prior partner before re-linking, restoring `active` only when the status was `grappled`, and freeing a partner when a unit is deleted — and the store's `setGrapple`/`removeUnit` delegate to them. The canvas draws an amber link line between grappled pairs (beneath the ship icons), and the selected-unit panel shows the partner with Grapple-with / Release controls. Covered by `grapple.test.ts`.
 - [x] **10.3 Aggressive grapple/boarding behaviour (CLAUDE.md spec).** Grapple proximity is now measured base-edge-to-base-edge (`baseGap` / `basesWithinGrapple` via `polygonDistance`), since centre-to-centre ≤20 mm is unreachable once bases are accounted for; the aggressive scoring rewards closing to within that gap. `decideAggressiveAction` declares a `grapple` when a plan lands within reach of an enemy, or a `board` when already grappled to one (stored as `Unit.hiddenAIAction`, `schemaVersion` 4). `revealOrders` computes it and the reveal panel surfaces it (grappled AI units now appear there) — this is a **suggestion only**, communicated like the fire intent. It is **not** auto-applied: `resolveTurn` just clears the suggestion, and the player confirms an actual grapple via the unit-panel grapple control (10.2). Covered by `ai.test.ts` / `geometry.test.ts`.
-- [ ] **10.4 Per-attitude min speed (5.2).** Decide whether to extend `SpeedRange` to `{ min, max }` per attitude, or keep the simplified `prevMoveDistance/2` model and update CLAUDE.md/this plan to match. (Currently simplified.)
+- [x] **10.4 Per-attitude min speed (5.2).** Resolved: the `prevMoveDistance/2` model is **not** a simplification — it is the actual game rule ("the next turn's min distance will be half of what they have moved this time", CLAUDE.md). `SpeedRange` stays `{ max }`; there is no separate per-attitude static `min`. No code change.
 
 ### UI / flow
 - [ ] **10.5 Difficulty slider (6.4).** Expose the existing `difficulty` parameter as a UI control (per-game or per-unit) instead of the hardcoded `1`.
