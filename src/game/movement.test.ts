@@ -40,6 +40,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     playerOrder: null,
     lastFireChunk: null,
     hiddenAIFirePlan: null,
+    hiddenAIAction: null,
     ...overrides,
   }
 }

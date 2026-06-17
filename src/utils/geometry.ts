@@ -108,3 +108,36 @@ export function polygonsIntersect(a: Point[], b: Point[]): boolean {
   }
   return true
 }
+
+/** Shortest distance from point `p` to the segment `a`–`b`. */
+export function pointSegmentDistance(p: Point, a: Point, b: Point): number {
+  const abx = b.x - a.x
+  const aby = b.y - a.y
+  const len2 = abx * abx + aby * aby
+  if (len2 === 0) return distance(p, a)
+  let t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2
+  t = Math.max(0, Math.min(1, t))
+  return distance(p, { x: a.x + t * abx, y: a.y + t * aby })
+}
+
+/**
+ * Shortest distance between two convex polygons (0 if they overlap). Computed as
+ * the min over every vertex-to-edge pair in both directions, which is exact for
+ * convex shapes — used to measure the gap between two ship bases.
+ */
+export function polygonDistance(a: Point[], b: Point[]): number {
+  if (polygonsIntersect(a, b)) return 0
+  let min = Infinity
+  const vertexToEdges = (verts: Point[], poly: Point[]) => {
+    for (const p of verts) {
+      for (let i = 0; i < poly.length; i++) {
+        const j = (i + 1) % poly.length
+        const d = pointSegmentDistance(p, poly[i], poly[j])
+        if (d < min) min = d
+      }
+    }
+  }
+  vertexToEdges(a, b)
+  vertexToEdges(b, a)
+  return min
+}

@@ -276,7 +276,7 @@ export function GameView() {
                 {currentGame.units.filter(u => u.side === 'player' && u.status === 'active' && u.playerOrder).map(playerUnit => (
                   <PlayerMovementPanel key={playerUnit.id} unit={playerUnit} />
                 ))}
-                {currentGame.units.filter(u => u.side === 'ai' && u.status === 'active').map(aiUnit => (
+                {currentGame.units.filter(u => u.side === 'ai' && u.status !== 'destroyed' && u.status !== 'surrendered').map(aiUnit => (
                   <div
                     key={aiUnit.id}
                     className="bg-gray-900/90 border border-gray-700 rounded-lg p-3 pointer-events-auto backdrop-blur-sm cursor-pointer"
@@ -288,8 +288,17 @@ export function GameView() {
                         {aiUnit.aiStyle}
                       </span>
                     </div>
-                    {expandedAIUnit === aiUnit.id && aiUnit.hiddenAIOrder && (
+                    {aiUnit.hiddenAIAction && (() => {
+                      const target = currentGame.units.find(u => u.id === aiUnit.hiddenAIAction!.targetId)
+                      return (
+                        <p className="text-amber-400 font-medium text-xs mt-1">
+                          {aiUnit.hiddenAIAction.type === 'board' ? '⚔️ Boarding' : '🪝 Grappling'} {target?.name ?? 'unknown'}
+                        </p>
+                      )
+                    })()}
+                    {expandedAIUnit === aiUnit.id && (aiUnit.hiddenAIOrder || aiUnit.hiddenAIFirePlan) && (
                       <div className="mt-2 text-xs text-gray-400 space-y-1">
+                        {aiUnit.hiddenAIOrder && (<>
                         <p>Total turn pts: {aiUnit.hiddenAIOrder.totalTurnPoints}</p>
                         <p>Effective max: {Math.round(aiUnit.hiddenAIOrder.effectiveMaxSpeed)}mm</p>
                         <p className="text-gray-500">Chunks: {aiUnit.hiddenAIOrder.chunks.map((c, i) => (
@@ -298,6 +307,7 @@ export function GameView() {
                             {Math.round(c.distance)}mm{c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}
                           </span>
                         ))}</p>
+                        </>)}
                         {aiUnit.hiddenAIFirePlan && (() => {
                           const target = currentGame.units.find(u => u.id === aiUnit.hiddenAIFirePlan!.targetId)
                           return (

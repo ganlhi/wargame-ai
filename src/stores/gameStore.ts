@@ -3,7 +3,7 @@ import { persist } from 'zustand/middleware'
 import { v4 as uuid } from 'uuid'
 import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry, MovementPlan } from '../types'
 import { applyMovementPlan } from '../game/movement'
-import { suggestMovement } from '../game/ai'
+import { suggestMovement, decideAggressiveAction } from '../game/ai'
 import { computeAIFirePlan } from '../game/combat'
 import { applyGrapple, clearGrappleForRemoved } from '../game/grapple'
 import { computeAttitude } from '../utils/attitude'
@@ -337,7 +337,20 @@ export const useGameStore = create<GameStore>()(
         const units = game.units.map((u) => {
           if (u.side !== 'ai' || u.status === 'destroyed' || u.status === 'surrendered') return u
           const firePlan = computeAIFirePlan(u, game.units, game.windDirection)
-          return { ...u, hiddenAIFirePlan: firePlan, lastFireChunk: firePlan?.chunkIndex ?? u.lastFireChunk }
+          const action = decideAggressiveAction(
+            u,
+            u.hiddenAIOrder,
+            game.units,
+            game.windDirection,
+            game.tableWidth,
+            game.tableHeight,
+          )
+          return {
+            ...u,
+            hiddenAIFirePlan: firePlan,
+            hiddenAIAction: action,
+            lastFireChunk: firePlan?.chunkIndex ?? u.lastFireChunk,
+          }
         })
 
         set({
@@ -399,11 +412,19 @@ export const useGameStore = create<GameStore>()(
         }
 
         const nextTurn = game.currentTurn + 1
+        // The AI's grapple/board intent (hiddenAIAction) is only a suggestion,
+        // shown during reveal like the fire plan — it is NOT auto-applied. The
+        // player confirms an actual grapple via the unit panel. Clear the
+        // suggestion now that the turn is resolving. Read the latest log (the
+        // per-move entries above were appended via addLogEntry) so they aren't
+        // clobbered by spreading the stale `game`.
+        const priorLog = get().currentGame?.actionLog ?? game.actionLog
 
         set({
           currentGame: {
             ...game,
-            units,
+            units: units.map((u) => ({ ...u, hiddenAIAction: null })),
+            actionLog: priorLog,
             currentTurn: nextTurn,
             currentPhase: 'orders',
             updatedAt: now(),

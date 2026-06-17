@@ -1,8 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { evaluatePosition, suggestMovement } from './ai'
+import { evaluatePosition, suggestMovement, decideAggressiveAction, basesWithinGrapple } from './ai'
 import { applyMovementPlan } from './movement'
 import { baseCorners, polygonsIntersect } from '../utils/geometry'
-import type { Unit, Attitude, SpeedRange, FiringArc } from '../types'
+import type { Unit, Attitude, SpeedRange, FiringArc, MovementPlan } from '../types'
+
+const IDLE_PLAN: MovementPlan = {
+  chunks: [{ distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }],
+  totalTurnPoints: 0,
+  effectiveMaxSpeed: 0,
+}
 
 const SPEED_PROFILE: Record<Attitude, SpeedRange> = {
   in_irons: { max: 0 },
@@ -38,6 +44,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     playerOrder: null,
     lastFireChunk: null,
     hiddenAIFirePlan: null,
+    hiddenAIAction: null,
     ...overrides,
   }
 }
@@ -90,6 +97,49 @@ describe('evaluatePosition', () => {
     const sIn = evaluatePosition(inPosition, [enemy], [], 1000, 1000)
     const sIdle = evaluatePosition(fastButIdle, [enemy], [], 1000, 1000)
     expect(sIn).toBeGreaterThan(sIdle)
+  })
+})
+
+describe('basesWithinGrapple', () => {
+  // bases are 30 (width) × 80 (length); along +x the length spans ±40.
+  const a = makeUnit({ position: { x: 500, y: 500 }, orientation: 8 })
+
+  it('is true when bases nearly touch (gap ≤ 20mm)', () => {
+    const b = makeUnit({ position: { x: 590, y: 500 }, orientation: 8 }) // 10mm gap
+    expect(basesWithinGrapple(a, b)).toBe(true)
+  })
+
+  it('is false when bases are well apart', () => {
+    const b = makeUnit({ position: { x: 700, y: 500 }, orientation: 8 }) // 120mm gap
+    expect(basesWithinGrapple(a, b)).toBe(false)
+  })
+})
+
+describe('decideAggressiveAction', () => {
+  it('declares a grapple when the plan ends within reach of an enemy', () => {
+    const unit = makeUnit({ aiStyle: 'aggressive', position: { x: 500, y: 500 }, orientation: 8 })
+    const foe = makeUnit({ id: 'e1', side: 'player', position: { x: 590, y: 500 }, orientation: 8 })
+    const action = decideAggressiveAction(unit, IDLE_PLAN, [unit, foe], 16, 1000, 1000)
+    expect(action).toEqual({ type: 'grapple', targetId: 'e1' })
+  })
+
+  it('boards the enemy it is already grappled to', () => {
+    const foe = makeUnit({ id: 'e1', side: 'player', status: 'grappled', grappledWith: 'u1' })
+    const unit = makeUnit({ aiStyle: 'aggressive', status: 'grappled', grappledWith: 'e1' })
+    const action = decideAggressiveAction(unit, null, [unit, foe], 16, 1000, 1000)
+    expect(action).toEqual({ type: 'board', targetId: 'e1' })
+  })
+
+  it('returns null for non-aggressive styles even when adjacent', () => {
+    const unit = makeUnit({ aiStyle: 'cautious', position: { x: 500, y: 500 }, orientation: 8 })
+    const foe = makeUnit({ id: 'e1', side: 'player', position: { x: 590, y: 500 }, orientation: 8 })
+    expect(decideAggressiveAction(unit, IDLE_PLAN, [unit, foe], 16, 1000, 1000)).toBeNull()
+  })
+
+  it('returns null when no enemy is within grapple reach', () => {
+    const unit = makeUnit({ aiStyle: 'aggressive', position: { x: 500, y: 500 }, orientation: 8 })
+    const foe = makeUnit({ id: 'e1', side: 'player', position: { x: 800, y: 500 }, orientation: 8 })
+    expect(decideAggressiveAction(unit, IDLE_PLAN, [unit, foe], 16, 1000, 1000)).toBeNull()
   })
 })
 

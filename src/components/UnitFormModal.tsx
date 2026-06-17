@@ -132,6 +132,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       hiddenAIOrder: null,
       playerOrder: null,
       hiddenAIFirePlan: null,
+      hiddenAIAction: null,
       lastFireChunk: null,
       isInIrons: false,
       // Grapple is a mutual relationship managed via the canvas unit panel

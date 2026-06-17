@@ -77,6 +77,16 @@ export interface FirePlan {
   arcSide: ArcSide
 }
 
+/**
+ * A close-quarters intent an aggressive AI declares for the turn:
+ * `grapple` = close to contact and grapple the target this turn;
+ * `board` = already grappled, press a boarding action against the target.
+ */
+export interface AIAction {
+  type: 'grapple' | 'board'
+  targetId: string
+}
+
 export interface Unit {
   id: string
   name: string
@@ -104,6 +114,7 @@ export interface Unit {
   playerOrder: MovementPlan | null
   lastFireChunk: number | null
   hiddenAIFirePlan: FirePlan | null
+  hiddenAIAction: AIAction | null
 }
 
 export interface MoveChunk {

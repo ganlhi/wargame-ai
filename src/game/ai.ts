@@ -1,9 +1,24 @@
-import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange } from '../types'
+import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange, AIAction } from '../types'
 import { arcSideToAngles } from '../types'
 import { enumerateMovementPlans, applyMovementPlan, orientationToVector } from './movement'
-import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle, baseCorners, polygonsIntersect } from '../utils/geometry'
+import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle, baseCorners, polygonsIntersect, polygonDistance } from '../utils/geometry'
 
-const GRAPPLE_RANGE = 20
+// Centre-to-centre grapple range is unreachable once ship bases are accounted
+// for, so grapple proximity is measured as the gap between the two bases.
+export const GRAPPLE_RANGE = 20
+
+/** Shortest gap (mm) between two ships' bases; 0 when their bases overlap. */
+export function baseGap(a: Unit, b: Unit): number {
+  return polygonDistance(
+    baseCorners(a.position, a.orientation, a.baseWidth, a.baseLength),
+    baseCorners(b.position, b.orientation, b.baseWidth, b.baseLength),
+  )
+}
+
+/** Whether two ships are close enough (bases within GRAPPLE_RANGE) to grapple. */
+export function basesWithinGrapple(a: Unit, b: Unit): boolean {
+  return baseGap(a, b) <= GRAPPLE_RANGE
+}
 const EDGE_DANGER = 120
 const EDGE_PENALTY_MULT = 2
 const TERRAIN_DANGER = 30
@@ -182,7 +197,7 @@ function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
 
     switch (unit.aiStyle) {
       case 'aggressive': {
-        if (dist < GRAPPLE_RANGE) score += 80
+        if (basesWithinGrapple(unit, e)) score += 80
         else if (dist < close) score += 50
         else if (dist < medium) score += 20
         else score -= Math.floor(dist / 100) * 5
@@ -320,7 +335,7 @@ function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
 
     switch (unit.aiStyle) {
       case 'aggressive': {
-        if (dist < GRAPPLE_RANGE) bonus += 40
+        if (basesWithinGrapple(unit, e)) bonus += 40
         if (weapons.isRaking) bonus += weapons.totalWeapons * 0.6
         else if (weapons.broadsideWeapons > 0) bonus += weapons.broadsideWeapons * 0.4
         break
@@ -612,4 +627,51 @@ export function suggestMovement(
     pool.map((i) => planScores[i]),
     difficulty,
   )
+}
+
+/**
+ * Decide whether an aggressive AI unit declares a close-quarters action this
+ * turn (CLAUDE.md aggressive style). Only aggressive units act:
+ *  - already grappled to an enemy → press a `board` action;
+ *  - otherwise, if its chosen `plan` lands it within grapple range of an enemy
+ *    base → declare a `grapple` against the nearest such enemy.
+ * Returns null for any other style/situation.
+ */
+export function decideAggressiveAction(
+  unit: Unit,
+  plan: MovementPlan | null,
+  allUnits: Unit[],
+  windDirection: number,
+  tableWidth: number,
+  tableHeight: number,
+): AIAction | null {
+  if (unit.aiStyle !== 'aggressive') return null
+  if (unit.status === 'destroyed' || unit.status === 'surrendered') return null
+
+  const isEnemy = (u: Unit) =>
+    u.side !== unit.side && u.status !== 'destroyed' && u.status !== 'surrendered'
+
+  // Already grappled to an enemy → board it (no movement needed).
+  if (unit.grappledWith) {
+    const partner = allUnits.find((u) => u.id === unit.grappledWith)
+    return partner && isEnemy(partner) ? { type: 'board', targetId: partner.id } : null
+  }
+
+  if (!plan) return null
+
+  // Where the plan leaves us; grapple if a base lands within range of an enemy.
+  const final = applyMovementPlan(unit, plan, windDirection, tableWidth, tableHeight)
+  const moved: Unit = { ...unit, position: final.position, orientation: final.orientation }
+
+  let target: Unit | null = null
+  let bestGap = Infinity
+  for (const e of allUnits) {
+    if (!isEnemy(e)) continue
+    const gap = baseGap(moved, e)
+    if (gap <= GRAPPLE_RANGE && gap < bestGap) {
+      bestGap = gap
+      target = e
+    }
+  }
+  return target ? { type: 'grapple', targetId: target.id } : null
 }

@@ -34,6 +34,7 @@ function makeUnit(id: string, overrides: Partial<Unit> = {}): Unit {
     playerOrder: null,
     lastFireChunk: null,
     hiddenAIFirePlan: null,
+    hiddenAIAction: null,
     ...overrides,
   }
 }
