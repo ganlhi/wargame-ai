@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { computeAttitude } from './attitude'
+import { computeAttitude, windTowardPoint, COMPASS_LABELS } from './attitude'
 import type { Attitude } from '../types'
 
 describe('computeAttitude', () => {
@@ -45,5 +45,18 @@ describe('computeAttitude', () => {
     for (let orientation = 0; orientation < 32; orientation++) {
       expect(computeAttitude(32, orientation)).toBe(computeAttitude(0, orientation))
     }
+  })
+})
+
+describe('windTowardPoint', () => {
+  it('returns the opposite compass point (180°) and wraps around', () => {
+    expect(windTowardPoint(0)).toBe(16) // from N → toward S
+    expect(windTowardPoint(8)).toBe(24) // from E → toward W
+    expect(windTowardPoint(16)).toBe(0) // from S → toward N
+    expect(windTowardPoint(24)).toBe(8) // from W → toward E
+  })
+
+  it('maps "from North" to a "toward South" label', () => {
+    expect(COMPASS_LABELS[windTowardPoint(0)]).toBe('S')
   })
 })

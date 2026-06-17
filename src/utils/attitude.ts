@@ -7,6 +7,15 @@ export const COMPASS_LABELS = [
 
 import type { Attitude } from '../types'
 
+/**
+ * `windDirection` is stored as the compass point the wind blows *from* (the
+ * convention all movement/attitude logic relies on). For display we show the
+ * point it blows *toward* — the opposite point, 16 points (180°) away.
+ */
+export function windTowardPoint(windDirection: number): number {
+  return (windDirection + 16) % 32
+}
+
 export function computeAttitude(windDirection: number, orientation: number): Attitude {
   const relative = ((windDirection - orientation) % 32 + 32) % 32
   const angle = relative > 16 ? 32 - relative : relative

@@ -5,7 +5,7 @@ import { PhotoCapture } from './PhotoCapture'
 import { GameCanvas } from './GameCanvas'
 import { UnitFormModal } from './UnitFormModal'
 import { PlayerMovementPanel } from './PlayerMovementPanel'
-import { COMPASS_LABELS } from '../utils/attitude'
+import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
 import { arcSideLabel } from '../types'
 import { suggestMovement } from '../game/ai'
 import type { Unit } from '../types'
@@ -161,7 +161,7 @@ export function GameView() {
         <div className="flex-1">
           <h1 className="text-base font-semibold">{currentGame.name}</h1>
           <p className="text-xs text-gray-500">
-            {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}{currentGame.tableWidth}&times;{currentGame.tableHeight}mm · Wind: {COMPASS_LABELS[currentGame.windDirection]} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
+            {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}{currentGame.tableWidth}&times;{currentGame.tableHeight}mm · Wind &rarr; {COMPASS_LABELS[windTowardPoint(currentGame.windDirection)]} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
           </p>
         </div>
         {hasUnsavedChanges && (

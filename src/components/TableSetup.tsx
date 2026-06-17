@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
-import { COMPASS_LABELS } from '../utils/attitude'
+import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
 
 const WIND_POINTS = Array.from({ length: 32 }, (_, i) => i)
 
@@ -56,7 +56,7 @@ export function TableSetup({ onComplete }: TableSetupProps) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-300 mb-3">Wind Direction</label>
+          <label className="block text-sm font-medium text-gray-300 mb-3">Wind Direction (blowing toward)</label>
           <div className="relative w-48 h-48 mx-auto">
             <div className="absolute inset-0 rounded-full border-2 border-gray-700" />
             {WIND_POINTS.map((p) => {
@@ -65,13 +65,15 @@ export function TableSetup({ onComplete }: TableSetupProps) {
               const r = 88
               const cx = 96 + r * Math.cos(rad)
               const cy = 96 + r * Math.sin(rad)
-              const isSelected = p === windDir
+              // The ring is a geographic compass; selecting point `p` means the
+              // wind blows toward `p`, which is stored as the opposite (from) point.
+              const isSelected = p === windTowardPoint(windDir)
               const isCardinal = p % 8 === 0
               const label = COMPASS_LABELS[p]
               return (
                 <button
                   key={p}
-                  onClick={() => setWindDir(p)}
+                  onClick={() => setWindDir(windTowardPoint(p))}
                   className="absolute cursor-pointer"
                   style={{
                     left: cx - 12,
@@ -88,7 +90,7 @@ export function TableSetup({ onComplete }: TableSetupProps) {
                     fontWeight: isCardinal ? 700 : 400,
                     color: isSelected ? '#fff' : isCardinal ? '#d1d5db' : '#6b7280',
                   }}
-                  title={`${label} (point ${p})`}
+                  title={`Blowing toward ${label} (point ${p})`}
                 >
                   {isCardinal ? label : ''}
                 </button>
@@ -96,8 +98,8 @@ export function TableSetup({ onComplete }: TableSetupProps) {
             })}
             <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
               <div className="text-center">
-                <div className="text-lg font-bold text-blue-400">{COMPASS_LABELS[windDir]}</div>
-                <div className="text-xs text-gray-500">Point {windDir}</div>
+                <div className="text-lg font-bold text-blue-400">{COMPASS_LABELS[windTowardPoint(windDir)]}</div>
+                <div className="text-xs text-gray-500">blowing toward</div>
               </div>
             </div>
           </div>
