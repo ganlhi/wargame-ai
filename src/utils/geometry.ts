@@ -49,3 +49,62 @@ export function isRakingAngle(targetRelAngle: number): boolean {
     inArc(targetRelAngle, stern.minAngle, stern.maxAngle)
   )
 }
+
+/**
+ * The four corners of a ship's rectangular base, in table coordinates.
+ * `length` runs along the bow–stern axis, `width` across it. `orientation` is a
+ * 32-point compass value (0 = bow pointing "up"), matching `orientationToVector`.
+ */
+export function baseCorners(
+  center: Point,
+  orientation: number,
+  width: number,
+  length: number,
+): [Point, Point, Point, Point] {
+  const angle = (orientation * Math.PI) / 16 - Math.PI / 2
+  // Forward (bow) unit vector and the perpendicular (starboard) unit vector.
+  const fx = Math.cos(angle)
+  const fy = Math.sin(angle)
+  const rx = -fy
+  const ry = fx
+  const hl = length / 2
+  const hw = width / 2
+  return [
+    { x: center.x + fx * hl + rx * hw, y: center.y + fy * hl + ry * hw },
+    { x: center.x + fx * hl - rx * hw, y: center.y + fy * hl - ry * hw },
+    { x: center.x - fx * hl - rx * hw, y: center.y - fy * hl - ry * hw },
+    { x: center.x - fx * hl + rx * hw, y: center.y - fy * hl + ry * hw },
+  ]
+}
+
+/**
+ * Separating Axis Theorem test for two convex polygons (here, ship-base
+ * rectangles). Returns true if they overlap. Touching edges count as
+ * overlapping, which is what we want for "bases must not intersect".
+ */
+export function polygonsIntersect(a: Point[], b: Point[]): boolean {
+  for (const poly of [a, b]) {
+    for (let i = 0; i < poly.length; i++) {
+      const j = (i + 1) % poly.length
+      // Outward normal of edge i→j.
+      const axisX = -(poly[j].y - poly[i].y)
+      const axisY = poly[j].x - poly[i].x
+
+      let minA = Infinity, maxA = -Infinity
+      for (const p of a) {
+        const proj = p.x * axisX + p.y * axisY
+        if (proj < minA) minA = proj
+        if (proj > maxA) maxA = proj
+      }
+      let minB = Infinity, maxB = -Infinity
+      for (const p of b) {
+        const proj = p.x * axisX + p.y * axisY
+        if (proj < minB) minB = proj
+        if (proj > maxB) maxB = proj
+      }
+
+      if (maxA < minB || maxB < minA) return false
+    }
+  }
+  return true
+}

@@ -5,7 +5,7 @@ import type { GameState } from '../types'
  * corresponding normalisation to `migrateSavedGame`. Saves written before
  * versioning existed have no `schemaVersion` and are treated as version 0.
  */
-export const CURRENT_SCHEMA_VERSION = 1
+export const CURRENT_SCHEMA_VERSION = 2
 
 type RawRecord = Record<string, unknown>
 
@@ -34,6 +34,8 @@ export function migrateSavedGame(raw: RawRecord): GameState {
       hiddenAIOrder: u.hiddenAIOrder ?? null,
       playerOrder: u.playerOrder ?? null,
       driftSpeed: u.driftSpeed ?? 10,
+      baseWidth: u.baseWidth ?? 30,
+      baseLength: u.baseLength ?? 80,
       lastFireChunk: u.lastFireChunk ?? null,
       hiddenAIFirePlan: u.hiddenAIFirePlan ?? null,
       firingArcs: ((u.firingArcs ?? []) as RawRecord[]).map((a) => ({

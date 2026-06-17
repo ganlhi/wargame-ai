@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { evaluatePosition, suggestMovement } from './ai'
+import { applyMovementPlan } from './movement'
+import { baseCorners, polygonsIntersect } from '../utils/geometry'
 import type { Unit, Attitude, SpeedRange, FiringArc } from '../types'
 
 const SPEED_PROFILE: Record<Attitude, SpeedRange> = {
@@ -24,6 +26,8 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     maxTurnPoints: 6,
     speedProfile: SPEED_PROFILE,
     driftSpeed: 10,
+    baseWidth: 30,
+    baseLength: 80,
     firingArcs: [],
     attitude: 'reaching',
     isInIrons: false,
@@ -111,5 +115,31 @@ describe('suggestMovement', () => {
     const result = suggestMovement(unit, [unit, enemy], [], 0, 1000, 1000, null)
     expect(result).not.toBeNull()
     expect(result!.chunks.every((c) => c.distance === 0)).toBe(true)
+  })
+
+  it('never picks a plan whose base overlaps another ship', () => {
+    // An aggressive ship heading straight at a ship parked just ahead would
+    // normally close to ram it; collision avoidance must keep the bases apart.
+    const unit = makeUnit({
+      aiStyle: 'aggressive',
+      position: { x: 500, y: 500 },
+      orientation: 8, // heading +x
+      firingArcs: [STARBOARD_ARC],
+    })
+    const blocker = makeUnit({
+      id: 'b1',
+      side: 'player',
+      position: { x: 640, y: 500 }, // directly ahead: clear now, but closing would overlap
+      orientation: 8,
+      firingArcs: [STARBOARD_ARC],
+    })
+    const result = suggestMovement(unit, [unit, blocker], [], 16, 1000, 1000, null)
+    expect(result).not.toBeNull()
+    const end = applyMovementPlan(unit, result!, 16, 1000, 1000)
+    const blockerFp = baseCorners(blocker.position, blocker.orientation, blocker.baseWidth, blocker.baseLength)
+    for (const pose of end.poses) {
+      const fp = baseCorners(pose, pose.orientation, unit.baseWidth, unit.baseLength)
+      expect(polygonsIntersect(fp, blockerFp)).toBe(false)
+    }
   })
 })

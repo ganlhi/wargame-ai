@@ -88,6 +88,11 @@ export interface Unit {
   maxTurnPoints: number
   speedProfile: Record<Attitude, SpeedRange>
   driftSpeed: number
+  // Footprint of the physical base the model is mounted on, in mm. `baseLength`
+  // runs along the bow–stern axis, `baseWidth` across (port–starboard). Used for
+  // collision avoidance so ships never overlap. 0 disables the check.
+  baseWidth: number
+  baseLength: number
   firingArcs: FiringArc[]
   attitude: Attitude
   isInIrons: boolean

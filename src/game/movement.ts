@@ -73,6 +73,7 @@ export function applyMovementPlan(
   hitBoundary: boolean
   distanceTraveled: number
   path: { x: number; y: number }[]
+  poses: { x: number; y: number; orientation: number }[]
 } {
   let { x, y } = unit.position
   let orientation = unit.orientation
@@ -80,6 +81,7 @@ export function applyMovementPlan(
   let hitBoundary = false
   let distanceTraveled = 0
   const path = [{ x, y }]
+  const poses = [{ x, y, orientation }]
 
   for (const chunk of plan.chunks) {
     if (isInIrons) {
@@ -104,6 +106,10 @@ export function applyMovementPlan(
     }
 
     path.push({ x, y })
+    // Heading used while travelling this segment (the turn, if any, applies
+    // only after arriving here), so the pose reflects where the base actually
+    // sat during the move.
+    poses.push({ x, y, orientation })
 
     if (isInIrons) {
       const dir = getInIronsTurnDirection(orientation, windAngle)
@@ -142,6 +148,7 @@ export function applyMovementPlan(
     hitBoundary,
     distanceTraveled: Math.round(distanceTraveled),
     path: path.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+    poses,
   }
 }
 

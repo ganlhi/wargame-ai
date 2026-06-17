@@ -19,6 +19,7 @@ export function GameView() {
   const [placementActive, setPlacementActive] = useState(false)
   const [pendingPosition, setPendingPosition] = useState<{ x: number; y: number } | null>(null)
   const [showActionLog, setShowActionLog] = useState(false)
+  const [showBases, setShowBases] = useState(false)
   const [expandedAIUnit, setExpandedAIUnit] = useState<string | null>(null)
   const hasContent = (currentGame?.terrain?.length ?? 0) > 0 || (currentGame?.units?.length ?? 0) > 0 || !!currentGame?.backgroundImage
   const [setupComplete, setSetupComplete] = useState(hasContent)
@@ -217,6 +218,14 @@ export function GameView() {
             Resolve Turn
           </button>
         )}
+        <button
+          onClick={() => setShowBases(!showBases)}
+          className={`px-2 py-1 text-sm rounded transition-colors cursor-pointer ${showBases ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
+          title="Toggle ship base outlines"
+          aria-pressed={showBases}
+        >
+          Bases
+        </button>
         {currentGame.currentPhase !== 'setup' && (
           <button
             onClick={() => setShowActionLog(!showActionLog)}
@@ -239,6 +248,7 @@ export function GameView() {
           onEditUnit={(id) => setEditingUnitId(id)}
           placementMode={placementActive}
           onTableClick={handleTableClick}
+          showBases={showBases}
         />
         {placementActive && (
           <div className="absolute inset-x-0 top-0 flex items-center justify-center pointer-events-none">

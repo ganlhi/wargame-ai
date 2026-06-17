@@ -95,6 +95,8 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
     running: { max: 110 },
   }
   const [driftSpeed, setDriftSpeed] = useState(unit?.driftSpeed ?? 10)
+  const [baseWidth, setBaseWidth] = useState(unit?.baseWidth ?? 30)
+  const [baseLength, setBaseLength] = useState(unit?.baseLength ?? 80)
   const [speedProfile, setSpeedProfile] = useState<Record<Attitude, SpeedRange>>(unit?.speedProfile ?? defaultProfile)
 
   const computedAttitude = computeAttitude(windDirection, orientation)
@@ -113,6 +115,8 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       maxTurnPoints,
       speedProfile,
       driftSpeed,
+      baseWidth,
+      baseLength,
 
       firingArcs: (Object.entries(arcRanges) as [ArcSide, number][])
         .filter(([, r]) => r > 0)
@@ -241,6 +245,30 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
           </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Base Width (mm)</label>
+              <input
+                type="number"
+                min={0}
+                value={baseWidth}
+                onChange={(e) => setBaseWidth(Math.max(0, Number(e.target.value)))}
+                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+            <div>
+              <label className="block text-xs text-gray-400 mb-1">Base Length (mm)</label>
+              <input
+                type="number"
+                min={0}
+                value={baseLength}
+                onChange={(e) => setBaseLength(Math.max(0, Number(e.target.value)))}
+                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              />
+            </div>
+          </div>
+          <p className="text-xs text-gray-500 -mt-1.5">Footprint of the model's base. The AI won't let its base overlap another ship's.</p>
 
           <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
             <div className="text-xs text-gray-400 font-medium mb-2">Max Speed per Attitude (mm/turn)</div>

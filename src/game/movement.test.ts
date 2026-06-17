@@ -28,6 +28,8 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     maxTurnPoints: 6,
     speedProfile: SPEED_PROFILE,
     driftSpeed: 10,
+    baseWidth: 30,
+    baseLength: 80,
     firingArcs: [],
     attitude: 'reaching',
     isInIrons: false,

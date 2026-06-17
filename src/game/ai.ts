@@ -1,7 +1,7 @@
 import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange } from '../types'
 import { arcSideToAngles } from '../types'
 import { enumerateMovementPlans, applyMovementPlan, orientationToVector } from './movement'
-import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle } from '../utils/geometry'
+import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle, baseCorners, polygonsIntersect } from '../utils/geometry'
 
 const GRAPPLE_RANGE = 20
 const EDGE_DANGER = 120
@@ -461,8 +461,26 @@ export function suggestMovement(
   const TERRAIN_RELIEF_BONUS = 0.3
   const currentTerrainDist = terrain.length > 0 ? minEdgeDistance(unit.position, terrain) : Infinity
 
+  // Footprints of every other ship at its current pose. The AI must never plan a
+  // move that drives its own base through (or to rest overlapping) one of these.
+  // All ships count, regardless of status — a wreck is still a model on the table.
+  const otherFootprints = allUnits
+    .filter((u) => u.id !== unit.id && u.baseWidth > 0 && u.baseLength > 0)
+    .map((u) => baseCorners(u.position, u.orientation, u.baseWidth, u.baseLength))
+
+  const hasBase = unit.baseWidth > 0 && unit.baseLength > 0
+  const poseCollides = (p: { x: number; y: number; orientation: number }): boolean => {
+    if (!hasBase || otherFootprints.length === 0) return false
+    const fp = baseCorners(p, p.orientation, unit.baseWidth, unit.baseLength)
+    return otherFootprints.some((of) => polygonsIntersect(fp, of))
+  }
+
+  const planCollides: boolean[] = []
   const planScores = plans.map((plan) => {
     const newState = applyMovementPlan(unit, plan, windDirection, tableWidth, tableHeight)
+    // Reject the plan if the base touches another ship at any point along the
+    // swept path (waypoints), not just at the final resting pose.
+    planCollides.push(newState.poses.some(poseCollides))
     const testUnit: Unit = { ...unit, ...newState, attitude: newState.attitude }
     let score = evaluatePosition(testUnit, enemies, terrain, tableWidth, tableHeight)
     if (newState.hitBoundary) {
@@ -584,5 +602,14 @@ export function suggestMovement(
     return score
   })
 
-  return selectPlan(plans, planScores, difficulty)
+  // Hard guarantee: only ever pick a collision-free plan. Fall back to the full
+  // set only if every plan collides (e.g. the ship is already boxed in) so it
+  // doesn't freeze entirely.
+  const clearIdx = plans.map((_, i) => i).filter((i) => !planCollides[i])
+  const pool = clearIdx.length > 0 ? clearIdx : plans.map((_, i) => i)
+  return selectPlan(
+    pool.map((i) => plans[i]),
+    pool.map((i) => planScores[i]),
+    difficulty,
+  )
 }

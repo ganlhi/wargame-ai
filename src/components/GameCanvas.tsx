@@ -26,9 +26,10 @@ interface GameCanvasProps {
   onEditUnit?: (unitId: string) => void
   placementMode?: boolean
   onTableClick?: (tableX: number, tableY: number) => void
+  showBases?: boolean
 }
 
-export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditUnit, placementMode = false, onTableClick }: GameCanvasProps) {
+export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditUnit, placementMode = false, onTableClick, showBases = false }: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
   const initialized = useRef(false)
@@ -314,6 +315,11 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
     const { w, h } = sizeRef.current
     if (!w || !h) return
 
+    // Table→screen scale, for drawing the base footprint at true (mm) size.
+    const sx = (w - PADDING * 2) / currentGame.tableWidth
+    const sy = (h - PADDING * 2) / currentGame.tableHeight
+    const s = Math.min(sx, sy)
+
     for (const u of currentGame.units) {
       const pos = tableToScreen(u.position.x, u.position.y, w, h)
       const container = new Container()
@@ -325,6 +331,19 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
       const isDisabled = u.status === 'destroyed' || u.status === 'surrendered'
       const hullColor = isPlayer ? 0x3b82f6 : 0xef4444
       const isSelected = u.id === selectedUnitId
+
+      // Base footprint (drawn first, so the ship icon sits on top). The
+      // container is already rotated to the heading, with local +x = bow, so the
+      // base length runs along x and the width along y.
+      if (showBases && u.baseWidth > 0 && u.baseLength > 0) {
+        const halfL = (u.baseLength / 2) * s
+        const halfW = (u.baseWidth / 2) * s
+        const base = new Graphics()
+        base.rect(-halfL, -halfW, halfL * 2, halfW * 2)
+        base.fill({ color: hullColor, alpha: 0.1 })
+        base.stroke({ color: hullColor, width: 1, alpha: isDisabled ? 0.3 : 0.55 })
+        container.addChild(base)
+      }
 
       const g = new Graphics()
       g.moveTo(12, 0)
@@ -362,7 +381,7 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
       container.addChild(g)
       uc.addChild(container)
     }
-  }, [currentGame, tableToScreen, selectedUnitId])
+  }, [currentGame, tableToScreen, selectedUnitId, showBases])
 
   const renderOverlay = useCallback(() => {
     const oc = overlayContainerRef.current
