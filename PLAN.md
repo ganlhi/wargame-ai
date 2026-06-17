@@ -63,7 +63,7 @@
 - [~] **4.1** Unit creation panel (`UnitFormModal.tsx`) — name, side, AI style, max turn points, firing arcs editor. _Deviation: arcs are edited by side + maxRange + weapon count; speed is a per-attitude `max` profile (+ `driftSpeed`) rather than a single min/max speed pair._
 - [x] **4.2** Placement mode — click to place, orientation control, ship icon at correct heading
 - [x] **4.3** Unit interaction — select, drag, rotate, context menu / form to change status / style / delete, name label
-- [~] **4.4** Unit status management — _status colours implemented (active/immobilised/destroyed/surrendered/grappled). **Grapple link line between units is NOT drawn**, and there is no "grappled-by" relationship (see Phase 10)._
+- [x] **4.4** Unit status management — _status colours implemented (active/immobilised/destroyed/surrendered/grappled); mutual `grappledWith` relationship, amber grapple link line, and grapple/release controls in the unit panel all done (see 10.2)._
 
 ---
 
@@ -121,7 +121,7 @@ Ordered roughly by value-to-effort. Each item references the phase it completes.
 ### Gameplay correctness
 - [x] **Ship base collision avoidance.** `Unit` now carries `baseWidth`/`baseLength` (mm, editable in `UnitFormModal`, defaulted by `migrateSavedGame` at `schemaVersion` 2). `suggestMovement` rejects any plan whose oriented base would intersect another ship's base along the swept path (waypoint poses from `applyMovementPlan`), via `baseCorners` + SAT `polygonsIntersect` in `geometry.ts`. Falls back to the full plan set only if every plan collides (already boxed in).
 - [x] **10.1 Attitude scoring (6.1).** `scoreAttitude(unit)` now rewards ending on a fast point of sail, derived from the ship's own `speedProfile` (normalised to its best attitude) with the canonical `quarter_reaching > running > reaching > beating > in_irons` order as a flat-profile fallback, and wired into `evaluatePosition`. The reward is deliberately small (`ATTITUDE_WEIGHT = 20`) so it only breaks ties in favour of speed — a slower end-of-turn attitude can still win when it sets up a better position next turn (carried by the positional scores + 2-ply lookahead), including deliberately turning into irons to switch tack.
-- [ ] **10.2 Grapple relationship + link (4.4).** Add a "grappled-by" reference on `Unit`, draw a connecting line on the canvas between grappled units, and surface grapple in the unit panel.
+- [x] **10.2 Grapple relationship + link (4.4).** `Unit` carries a mutual `grappledWith: string | null` (defaulted by `migrateSavedGame`, `schemaVersion` 3). The pure helpers in `src/game/grapple.ts` (`applyGrapple` / `clearGrappleForRemoved`) keep both sides + statuses in sync — detaching a prior partner before re-linking, restoring `active` only when the status was `grappled`, and freeing a partner when a unit is deleted — and the store's `setGrapple`/`removeUnit` delegate to them. The canvas draws an amber link line between grappled pairs (beneath the ship icons), and the selected-unit panel shows the partner with Grapple-with / Release controls. Covered by `grapple.test.ts`.
 - [ ] **10.3 Aggressive grapple/boarding behaviour (CLAUDE.md spec).** Let an aggressive AI close to ≤20 mm to grapple, and take a boarding action when already grappled (today grappled units simply freeze — `suggestMovement` returns `null`).
 - [ ] **10.4 Per-attitude min speed (5.2).** Decide whether to extend `SpeedRange` to `{ min, max }` per attitude, or keep the simplified `prevMoveDistance/2` model and update CLAUDE.md/this plan to match. (Currently simplified.)
 

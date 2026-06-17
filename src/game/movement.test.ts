@@ -33,6 +33,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     firingArcs: [],
     attitude: 'reaching',
     isInIrons: false,
+    grappledWith: null,
     prevAttitude: 'reaching',
     prevMoveDistance: 0,
     hiddenAIOrder: null,

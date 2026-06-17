@@ -5,6 +5,7 @@ import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntr
 import { applyMovementPlan } from '../game/movement'
 import { suggestMovement } from '../game/ai'
 import { computeAIFirePlan } from '../game/combat'
+import { applyGrapple, clearGrappleForRemoved } from '../game/grapple'
 import { computeAttitude } from '../utils/attitude'
 import { migrateSavedGame, CURRENT_SCHEMA_VERSION } from './migrations'
 
@@ -35,6 +36,7 @@ interface GameStore {
   addUnit: (unit: Unit) => void
   updateUnit: (id: string, updates: Partial<Unit>) => void
   removeUnit: (id: string) => void
+  setGrapple: (id: string, otherId: string | null) => void
   addLogEntry: (entry: ActionLogEntry) => void
   startGame: () => void
   revealOrders: () => void
@@ -261,9 +263,18 @@ export const useGameStore = create<GameStore>()(
         set({
           currentGame: {
             ...game,
-            units: game.units.filter((u) => u.id !== id),
+            units: clearGrappleForRemoved(game.units, id),
             updatedAt: now(),
           },
+          hasUnsavedChanges: true,
+        })
+      },
+
+      setGrapple: (id, otherId) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: { ...game, units: applyGrapple(game.units, id, otherId), updatedAt: now() },
           hasUnsavedChanges: true,
         })
       },

@@ -96,6 +96,8 @@ export interface Unit {
   firingArcs: FiringArc[]
   attitude: Attitude
   isInIrons: boolean
+  // Id of the unit this one is grappled to (mutual). null when not grappled.
+  grappledWith: string | null
   prevAttitude: Attitude
   prevMoveDistance: number
   hiddenAIOrder: MovementPlan | null

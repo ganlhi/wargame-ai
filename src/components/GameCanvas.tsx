@@ -56,6 +56,7 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
   const updateTerrain = useGameStore((s) => s.updateTerrain)
   const removeTerrain = useGameStore((s) => s.removeTerrain)
   const removeUnit = useGameStore((s) => s.removeUnit)
+  const setGrapple = useGameStore((s) => s.setGrapple)
   const sizeRef = useRef({ w: 0, h: 0 })
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const backgroundGenRef = useRef(0)
@@ -319,6 +320,25 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
     const sx = (w - PADDING * 2) / currentGame.tableWidth
     const sy = (h - PADDING * 2) / currentGame.tableHeight
     const s = Math.min(sx, sy)
+
+    // Grapple link lines, drawn first so the ship icons sit on top. One line per
+    // pair (dedup via sorted id key) connecting the two grappled units.
+    const drawnLinks = new Set<string>()
+    for (const u of currentGame.units) {
+      if (!u.grappledWith) continue
+      const partner = currentGame.units.find((p) => p.id === u.grappledWith)
+      if (!partner) continue
+      const key = [u.id, partner.id].sort().join('|')
+      if (drawnLinks.has(key)) continue
+      drawnLinks.add(key)
+      const a = tableToScreen(u.position.x, u.position.y, w, h)
+      const b = tableToScreen(partner.position.x, partner.position.y, w, h)
+      const link = new Graphics()
+      link.moveTo(a.x, a.y)
+      link.lineTo(b.x, b.y)
+      link.stroke({ color: 0xf59e0b, width: 2, alpha: 0.75 })
+      uc.addChild(link)
+    }
 
     for (const u of currentGame.units) {
       const pos = tableToScreen(u.position.x, u.position.y, w, h)
@@ -1000,6 +1020,51 @@ export function GameCanvas({ editingTerrain, onFinishEdit, onCancelEdit, onEditU
           <div className="text-xs text-gray-500 mb-3">
             Orientation: {COMPASS_LABELS[selectedUnit.orientation]} &middot; Attitude: {currentGame ? ATTITUDE_LABELS[computeAttitude(currentGame.windDirection, selectedUnit.orientation)] : ''}
           </div>
+
+          {(() => {
+            const partner = selectedUnit.grappledWith
+              ? currentGame?.units.find((u) => u.id === selectedUnit.grappledWith)
+              : null
+            const candidates = (currentGame?.units ?? []).filter(
+              (u) => u.id !== selectedUnit.id && u.status !== 'destroyed' && u.status !== 'surrendered',
+            )
+            return (
+              <div className="mb-3 border-t border-gray-800 pt-2">
+                {partner ? (
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="text-xs text-amber-400">
+                      ⚓ Grappled with <span className="font-medium">{partner.name}</span>
+                    </span>
+                    <button
+                      onClick={() => setGrapple(selectedUnit.id, null)}
+                      className="text-xs text-amber-400 hover:text-amber-300 border border-amber-800 rounded px-2 py-1 transition-colors cursor-pointer whitespace-nowrap"
+                    >
+                      Release
+                    </button>
+                  </div>
+                ) : candidates.length > 0 ? (
+                  <label className="block">
+                    <span className="text-xs text-gray-400">Grapple with</span>
+                    <select
+                      value=""
+                      onChange={(e) => e.target.value && setGrapple(selectedUnit.id, e.target.value)}
+                      className="mt-1 w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+                    >
+                      <option value="">Select a ship…</option>
+                      {candidates.map((u) => (
+                        <option key={u.id} value={u.id}>
+                          {u.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : (
+                  <span className="text-xs text-gray-600">No other ships to grapple</span>
+                )}
+              </div>
+            )
+          })()}
+
           <div className="flex gap-2">
             <button
               onClick={() => {
