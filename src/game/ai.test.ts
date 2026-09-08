@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { evaluatePosition, suggestMovement, decideAggressiveAction, basesWithinGrapple } from './ai'
+import {
+  evaluatePosition, suggestMovement, decideAggressiveAction, basesWithinGrapple, scoreTack,
+} from './ai'
 import { applyMovementPlan } from './movement'
 import { baseCorners, polygonsIntersect } from '../utils/geometry'
-import type { Unit, Attitude, SpeedRange, FiringArc, MovementPlan } from '../types'
+import type { Unit, Attitude, SpeedRange, FiringArc, MovementPlan, TableTerrain } from '../types'
 
 const IDLE_PLAN: MovementPlan = {
   chunks: [{ distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }],
@@ -277,5 +279,153 @@ describe('disengagement leash (infinite table)', () => {
   it('leaves a ship with no enemies unpenalised wherever it is', () => {
     const lonely = makeUnit({ aiStyle: 'defensive', position: { x: 99999, y: 99999 } })
     expect(Number.isFinite(evaluatePosition(lonely, [], []))).toBe(true)
+  })
+})
+
+describe('tacking as an AI choice', () => {
+  // A ship that never moves, so the lookahead's projection of it is exact and
+  // the test turns purely on the geometry the tack creates.
+  const ANCHORED: Record<Attitude, SpeedRange> = {
+    in_irons: { max: 0 }, beating: { max: 0 }, reaching: { max: 0 },
+    quarter_reaching: { max: 0 }, running: { max: 0 },
+  }
+  const BROADSIDES: FiringArc[] = [
+    { id: 'p', side: 'port', maxRange: 300, weapons: 10 },
+    { id: 's', side: 'starboard', maxRange: 300, weapons: 10 },
+  ]
+
+  // Wind from the north. Orientation 6 is beating with the wind on the port
+  // bow; coming about swings 12 points to port, so a ship with 6 turn points
+  // takes two turns and finishes at (0, 40) heading 26 (WNW), drifting 20mm a
+  // turn. Its port broadside then bears SSW, its starboard NNE.
+  const beatingAI = (overrides: Partial<Unit> = {}) =>
+    makeUnit({
+      aiStyle: 'aggressive',
+      position: { x: 0, y: 0 },
+      orientation: 6,
+      attitude: 'beating',
+      prevAttitude: 'beating',
+      maxTurnPoints: 6,
+      driftSpeed: 20,
+      firingArcs: BROADSIDES,
+      ...overrides,
+    })
+
+  /** An enemy `range` mm away on the given bearing, measured from `from`. */
+  const enemyOnBearing = (bearingPoint: number, range: number, from = { x: 0, y: 40 }) => {
+    const angle = (bearingPoint * Math.PI) / 16 - Math.PI / 2
+    return makeUnit({
+      id: 'e1',
+      side: 'player',
+      orientation: 0,
+      speedProfile: ANCHORED,
+      firingArcs: BROADSIDES,
+      position: {
+        x: Math.round(from.x + Math.cos(angle) * range),
+        y: Math.round(from.y + Math.sin(angle) * range),
+      },
+    })
+  }
+
+  it('comes about when the tack puts a broadside on an enemy at short range', () => {
+    const unit = beatingAI()
+    const enemy = enemyOnBearing(18, 90) // SSW: the port broadside
+    const plan = suggestMovement(unit, [unit, enemy], [], 0, 'beating')
+    expect(plan?.isTack).toBe(true)
+    // A tack is a tack: no way on at all.
+    expect(plan!.chunks.every((c) => c.distance === 0)).toBe(true)
+  })
+
+  it('sails on instead when the enemy is already ahead of her', () => {
+    // Enemy fine off the bow on the current heading: coming about would throw
+    // away several turns to end up further from a fight already in reach.
+    const unit = beatingAI()
+    const enemy = makeUnit({
+      id: 'e1', side: 'player', orientation: 0, speedProfile: ANCHORED,
+      firingArcs: BROADSIDES, position: { x: 210, y: -90 },
+    })
+    const plan = suggestMovement(unit, [unit, enemy], [], 0, 'beating')
+    expect(plan?.isTack).toBeFalsy()
+  })
+
+  describe('scoreTack', () => {
+    const score = (enemy: Unit, unit = beatingAI(), terrain: TableTerrain[] = []) =>
+      scoreTack(unit, [enemy], terrain, 0)
+
+    it('pays for a broadside bearing at short range', () => {
+      expect(score(enemyOnBearing(18, 90))).toBeGreaterThan(0)
+    })
+
+    it('pays more the closer the broadside bears', () => {
+      expect(score(enemyOnBearing(18, 60))).toBeGreaterThan(
+        score(enemyOnBearing(18, 100)),
+      )
+    })
+
+    it('pays nothing once the enemy is beyond short range', () => {
+      expect(score(enemyOnBearing(18, 900))).toBe(0)
+    })
+
+    it('pays nothing when only the bow or stern would bear', () => {
+      // Dead ahead on the new tack: no broadside on her at all.
+      expect(score(enemyOnBearing(26, 90))).toBe(0)
+    })
+
+    it('pays nothing for drifting onto terrain', () => {
+      const shoal: TableTerrain = {
+        id: 't1', type: 'shoal', center: { x: 0, y: 40 },
+        shape: { kind: 'circle', width: 120, height: 120, rotation: 0 },
+      }
+      expect(score(enemyOnBearing(18, 90), beatingAI(), [shoal])).toBe(0)
+    })
+
+    it('discounts a tack that takes longer to come round', () => {
+      // No drift in either case, so both finish in the same place and the only
+      // difference is how many turns the swing takes: 2 against 6.
+      const enemy = enemyOnBearing(18, 90, { x: 0, y: 0 })
+      const quick = score(enemy, beatingAI({ maxTurnPoints: 6, driftSpeed: 0 }))
+      const slow = score(enemy, beatingAI({ maxTurnPoints: 2, driftSpeed: 0 }))
+      expect(slow).toBeGreaterThan(0)
+      expect(slow).toBeLessThan(quick)
+    })
+
+    it('interests a defensive ship far less than one looking for a fight', () => {
+      const enemy = enemyOnBearing(18, 90)
+      expect(score(enemy, beatingAI({ aiStyle: 'defensive' }))).toBeLessThan(
+        score(enemy, beatingAI({ aiStyle: 'aggressive' })),
+      )
+    })
+
+    it('is worthless with no enemy, or to a ship that cannot come round', () => {
+      expect(scoreTack(beatingAI(), [], [], 0)).toBe(0)
+      expect(score(enemyOnBearing(18, 90), beatingAI({ maxTurnPoints: 0 }))).toBe(0)
+    })
+  })
+
+  it('will not tack onto terrain, however good the broadside would be', () => {
+    const unit = beatingAI()
+    const enemy = enemyOnBearing(18, 90)
+    const shoal: TableTerrain = {
+      id: 't1',
+      type: 'shoal',
+      center: { x: 0, y: 40 }, // exactly where the tack would leave her
+      shape: { kind: 'circle', width: 120, height: 120, rotation: 0 },
+    }
+    const plan = suggestMovement(unit, [unit, enemy], [shoal], 0, 'beating')
+    expect(plan?.isTack).toBeFalsy()
+  })
+
+  it('never offers a tack to a ship that was not beating all last turn', () => {
+    const unit = beatingAI()
+    const enemy = enemyOnBearing(18, 90)
+    const plan = suggestMovement(unit, [unit, enemy], [], 0, 'reaching')
+    expect(plan?.isTack).toBeFalsy()
+  })
+
+  it('gives a ship already mid-tack no option but to carry on', () => {
+    const unit = beatingAI({ orientation: 2, isInIrons: true, tackDirection: 'port', attitude: 'in_irons' })
+    const enemy = enemyOnBearing(18, 90)
+    const plan = suggestMovement(unit, [unit, enemy], [], 0, 'in_irons')
+    expect(plan?.isTack).toBe(true)
   })
 })

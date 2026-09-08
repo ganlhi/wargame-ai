@@ -96,6 +96,12 @@ The player declares a tack with a single button, which fills in the whole moveme
 
 Depending on its style, an AI controlled unit would make different decisions when it comes to move.
 
+### Tacking
+
+Scored on the turn it begins, a tack is always among the worst moves available: the ship is in irons, making no way, drifting to leeward. So an AI judges a tack by where it *ends* instead — the pose on the far tack, several turns and a drift downwind from here. What makes it worth the cost is finishing with a **broadside bearing on an enemy at short range**, worth more the closer it is and more again if it would rake. That reward is discounted for every turn the tack takes, ignored if the drift would put the ship on terrain, and matters far less to a defensive ship, which has no interest in closing.
+
+An AI may of course still come about for the ordinary reasons any move is chosen — to close, or to get out from under an enemy's guns.
+
 ### Aggressive
 
 An aggressive unit will always try to go close an ennemy to shoot it with its port or starboard broadside, or even decide to come into contact (or less than 20mm away) to grapple it. If already grappled, it will go for a boarding action. 

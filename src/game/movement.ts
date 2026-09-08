@@ -83,6 +83,8 @@ export function canTack(unit: Unit, prevAttitude: Attitude | null): boolean {
   return (
     unit.status === 'active' &&
     !unit.isInIrons &&
+    // A ship that cannot turn at all can never come through the wind.
+    unit.maxTurnPoints > 0 &&
     unit.attitude === 'beating' &&
     prevAttitude === 'beating'
   )
@@ -243,6 +245,48 @@ export function applyMovementPlan(
     path: path.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
     poses,
   }
+}
+
+/**
+ * Where a tack declared now would leave the ship, and how many turns it takes.
+ *
+ * A tack is judged by its outcome, not by the turn it begins: on that turn the
+ * ship is in irons, making no way and drifting to leeward, which is as bad as a
+ * position gets. Running the whole procedure forward gives the pose that is
+ * actually being bought — beating on the far tack, some way downwind of here.
+ *
+ * `maxTurns` only guards against a ship that somehow cannot come round; a tack
+ * takes `ceil(points to swing / maxTurnPoints)` turns, which is small.
+ */
+export function projectTackCompletion(
+  unit: Unit,
+  windDirection: number,
+  maxTurns = 8,
+): { position: { x: number; y: number }; orientation: number; turns: number; completed: boolean } {
+  let current = unit
+  let turns = 0
+  let completed = false
+
+  while (turns < maxTurns) {
+    const plan = buildTackPlan(current, windDirection)
+    if (plan.totalTurnPoints === 0) break
+    const result = applyMovementPlan(current, plan, windDirection)
+    current = {
+      ...current,
+      position: result.position,
+      orientation: result.orientation,
+      attitude: result.attitude,
+      isInIrons: result.isInIrons,
+      tackDirection: result.tackDirection,
+    }
+    turns++
+    if (!result.isInIrons) {
+      completed = true
+      break
+    }
+  }
+
+  return { position: current.position, orientation: current.orientation, turns, completed }
 }
 
 export function enumerateMovementPlans(

@@ -84,7 +84,7 @@
 
 ## Phase 6 — AI Decision System (`src/game/ai.ts`)
 
-- [x] **6.1** `evaluatePosition(...)` — distance-to-enemy, broadside/raking arcs, firing range, **disengagement leash** (Phase 11, replacing the old edge penalty), terrain proximity, enemy-broadside danger, **and attitude** (`scoreAttitude`, see 10.1).
+- [x] **6.1** `evaluatePosition(...)` — distance-to-enemy, broadside/raking arcs, firing range, **disengagement leash** (Phase 11, replacing the old edge penalty), terrain proximity, enemy-broadside danger, **and attitude** (`scoreAttitude`, see 10.1). A declared tack is additionally scored by its outcome (`scoreTack`, Phase 15.7).
 - [x] **6.2** Style-specific scoring modifiers — aggressive / cautious / defensive (`scoreDistanceByStyle`, `scoreStyleSpecific`)
 - [x] **6.3** `suggestMovement(...)` — enumerate → simulate → score → select; includes a **2-ply lookahead** projecting own and enemy future positions
 - [~] **6.4** Difficulty / randomness — _`selectPlan()` fully supports a `difficulty` param (random ↔ noisy ↔ best), but it is hardcoded to `1` at both call sites and there is **no UI control**._
@@ -204,7 +204,7 @@ CLAUDE.md now spells out tacking as a committed procedure rather than a one-off 
 - [x] **15.5 No choice mid-tack.** `enumerateMovementPlans` returns exactly one plan for a ship in irons, and filters out any ordinary order that would leave a ship in irons, since turning up into the wind is only legal through the procedure. `resolveTurn` falls back to the continuation when a mid-tack ship has no order, so the rule holds even if the panel never rendered.
 - [x] **15.6 Declare-tack button (7.3).** `PlayerMovementPanel` offers a one-press **Declare tack** when eligible, filling in the whole plan; mid-tack it locks the editor, states the swing and drift, and writes the forced continuation in automatically.
 
-_Known gap: the AI scores a tack like any other plan, and a plan that ends in irons scores poorly, so AI ships will rarely tack of their own accord. Making the AI work to windward deliberately is a scoring change, not a rules one — see 10.5/6.4._
+- [x] **15.7 Tacking as an AI choice (6.1).** `scoreTack` judges a declared tack by the pose it ends in rather than the turn it starts, since the latter is always among the worst plans available. `projectTackCompletion` runs the procedure out to the new tack; the reward is broadside guns that would bear on an enemy at short range (more inside the close tier, more again for a rake), with the enemy carried forward the same number of turns at cruising speed. It is discounted `0.5` per turn the tack takes, vetoed if the drift ends on terrain, and cut to a quarter for a defensive ship. This closes the gap left when the procedure landed.
 
 ---
 

@@ -1,6 +1,9 @@
 import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange, AIAction } from '../types'
 import { arcSideToAngles } from '../types'
-import { enumerateMovementPlans, applyMovementPlan, orientationToVector, driftVector } from './movement'
+import {
+  enumerateMovementPlans, applyMovementPlan, orientationToVector, driftVector,
+  projectTackCompletion,
+} from './movement'
 import type { Point } from '../utils/geometry'
 import {
   distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle,
@@ -39,6 +42,20 @@ const LEASH_MULT = 1.5
 const LEASH_PENALTY_MULT = 0.5
 // Used when neither ship has any armament to derive a range from.
 const LEASH_FALLBACK_RANGE = 400
+
+// What coming about is worth, per broadside gun that would bear once the tack
+// is complete. A tack costs several turns in irons, so it has to be paid for by
+// the position it buys; these are per-gun, discounted per turn the tack takes.
+const TACK_BROADSIDE_CLOSE = 14
+const TACK_BROADSIDE_MEDIUM = 7
+const TACK_RAKING_BONUS = 20
+// Closing to short range is the point of the manoeuvre, which suits a ship
+// looking for a fight far more than one trying to stay out of one.
+const TACK_STYLE_MULT: Record<string, number> = {
+  aggressive: 1,
+  cautious: 1,
+  defensive: 0.25,
+}
 
 function maxFiringRange(unit: Unit): number {
   return Math.max(...unit.firingArcs.map((a) => a.maxRange), 0)
@@ -305,6 +322,61 @@ function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
   return bonus
 }
 
+/**
+ * What a declared tack is worth, judged by where it ends rather than where it
+ * starts.
+ *
+ * On the turn a tack is declared the ship is in irons, drifting, making no way
+ * and pointing nowhere useful — scored on its own terms it is always among the
+ * worst plans available, so the AI would never come about. What makes it worth
+ * doing is the position on the far tack: reward a tack that finishes with a
+ * broadside bearing on an enemy at short range, discounted for every turn spent
+ * getting there.
+ */
+export function scoreTack(
+  unit: Unit,
+  enemies: Unit[],
+  terrain: TableTerrain[],
+  windDirection: number,
+): number {
+  if (enemies.length === 0) return 0
+
+  const outcome = projectTackCompletion(unit, windDirection)
+  if (!outcome.completed || outcome.turns === 0) return 0
+  // Drifting onto a shoal is not a position worth buying.
+  if (pointInTerrain(outcome.position, terrain)) return 0
+
+  const finished: Unit = { ...unit, position: outcome.position, orientation: outcome.orientation }
+  const heading = headingDeg(outcome.orientation)
+  const { close, medium } = getRangeTiers(finished)
+
+  let best = 0
+  for (const enemy of enemies) {
+    // The enemy will not oblige by sitting still: carry it forward at cruising
+    // speed for as long as the tack takes — the same guess the 2-ply lookahead
+    // already makes, just repeated.
+    let position = enemy.position
+    for (let turn = 0; turn < outcome.turns; turn++) {
+      position = projectNextPosition(
+        position, enemy.orientation, enemy.attitude, enemy.isInIrons,
+        enemy.speedProfile, enemy.driftSpeed ?? 10, windDirection,
+      )
+    }
+    const projected: Unit = { ...enemy, position }
+
+    const { broadsideWeapons, isRaking } = getEngageableWeapons(finished, heading, projected)
+    if (broadsideWeapons === 0) continue
+
+    const dist = distance(outcome.position, position)
+    if (dist > medium) continue
+
+    const perGun = dist <= close ? TACK_BROADSIDE_CLOSE : TACK_BROADSIDE_MEDIUM
+    best = Math.max(best, broadsideWeapons * perGun + (isRaking ? TACK_RAKING_BONUS : 0))
+  }
+
+  return best * (TACK_STYLE_MULT[unit.aiStyle] ?? 1) * LOOKAHEAD_DISCOUNT ** (outcome.turns - 1)
+}
+
 export function evaluatePosition(
   unit: Unit,
   enemies: Unit[],
@@ -439,6 +511,11 @@ export function suggestMovement(
     planCollides.push(newState.poses.some(poseCollides))
     const testUnit: Unit = { ...unit, ...newState, attitude: newState.attitude }
     let score = evaluatePosition(testUnit, enemies, terrain)
+    if (plan.isTack) {
+      // Scored on the turn it starts a tack is always among the worst options,
+      // so it is judged by the position it ends in instead.
+      score += scoreTack(unit, enemies, terrain, windDirection)
+    }
     if (terrain.length > 0) {
       const newDist = minEdgeDistance(newState.position, terrain)
       if (newDist > currentTerrainDist) {

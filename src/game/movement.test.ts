@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   buildTackPlan,
   canTack,
+  projectTackCompletion,
   windSide,
   splitMovement,
   computeEffectiveMaxSpeed,
@@ -360,6 +361,25 @@ describe('tacking procedure', () => {
       expect(windSide(unit.orientation, 0)).toBe('starboard')
       // Pushed steadily downwind the whole time.
       expect(unit.position.y).toBe(50 * turns)
+    })
+  })
+
+  describe('projectTackCompletion', () => {
+    it('runs the whole procedure out to the new tack', () => {
+      const unit = beating({ position: { x: 0, y: 0 }, maxTurnPoints: 6, driftSpeed: 20 })
+      const outcome = projectTackCompletion(unit, 0)
+      expect(outcome.completed).toBe(true)
+      // 12 points to swing at 6 a turn, drifting 20mm downwind each time.
+      expect(outcome.turns).toBe(2)
+      expect(outcome.orientation).toBe(26)
+      expect(outcome.position).toEqual({ x: 0, y: 40 })
+      expect(windSide(outcome.orientation, 0)).toBe('starboard')
+    })
+
+    it('reports failure rather than looping for a ship that cannot come round', () => {
+      const outcome = projectTackCompletion(beating({ maxTurnPoints: 0 }), 0)
+      expect(outcome.completed).toBe(false)
+      expect(outcome.turns).toBe(0)
     })
   })
 
