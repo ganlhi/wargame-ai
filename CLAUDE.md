@@ -94,7 +94,9 @@ Since the table is infinite, there is no edge to stop a defensive unit sailing a
 
 ## Technologies
 
-This program should be web based, optimised for usage on a small tablet or a big smartphone. It should store the state of ongoing games in local storage, not needing any server side storage or app code. It should be a full frontend app.
+This program should be web based, optimised for usage on a small tablet or a big smartphone.
+
+Dropdowns use a custom control rather than a native `<select>`: a native one hands its popup to the OS, which on a phone or tablet is a sheet or a centred dialog rather than a list under the control — and inside a transformed or scroll-clipped container it can be anchored somewhere else entirely. The app's list opens against its trigger on every platform. It should store the state of ongoing games in local storage, not needing any server side storage or app code. It should be a full frontend app.
 
 All table information is entered by hand — there is no photo capture. With no table edges to align to and terrain reduced to primitives, a photograph has nothing left to anchor, so the setup flow is wind direction followed by typed terrain and unit descriptions.
 

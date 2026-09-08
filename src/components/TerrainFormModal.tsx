@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
-import { TERRAIN_COLORS } from './TerrainPanel'
+import { TERRAIN_COLORS, TERRAIN_TYPES } from '../utils/terrainStyles'
 import { OffsetInput } from './OffsetInput'
 import { COMPASS_LABELS } from '../utils/attitude'
 import { TERRAIN_SHAPE_KINDS } from '../types'
@@ -67,7 +67,7 @@ export function TerrainFormModal({ terrain, onClose }: TerrainFormModalProps) {
           <div>
             <label className="block text-xs text-gray-400 mb-1.5">Type</label>
             <div className="flex gap-2">
-              {(Object.keys(TERRAIN_COLORS) as TerrainType[]).map((t) => (
+              {TERRAIN_TYPES.map((t) => (
                 <button
                   key={t}
                   type="button"

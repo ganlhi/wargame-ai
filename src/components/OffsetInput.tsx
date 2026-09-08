@@ -1,4 +1,5 @@
 import type { Offset } from '../utils/coordinates'
+import { Select } from './Select'
 
 interface AxisProps {
   label: string
@@ -23,15 +24,16 @@ function Axis({ label, magnitude, sign, positiveLabel, negativeLabel, onChange, 
           onChange={(e) => onChange(Math.max(0, Number(e.target.value)), sign)}
           className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 disabled:opacity-40"
         />
-        <select
+        <Select
           value={sign}
-          disabled={disabled}
-          onChange={(e) => onChange(magnitude, e.target.value)}
-          className="bg-gray-800 border border-gray-700 rounded px-2 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer disabled:opacity-40"
-        >
-          <option value="+">{positiveLabel}</option>
-          <option value="-">{negativeLabel}</option>
-        </select>
+          onChange={(next) => onChange(magnitude, next)}
+          ariaLabel={label}
+          className={`shrink-0 ${disabled ? 'pointer-events-none opacity-40' : ''}`}
+          options={[
+            { value: '+', label: positiveLabel },
+            { value: '-', label: negativeLabel },
+          ]}
+        />
       </div>
     </div>
   )

@@ -3,6 +3,13 @@ import type { Unit, MovementPlan, MoveChunk } from '../types'
 import { useGameStore } from '../stores/gameStore'
 import { computeAttitude, ATTITUDE_LABELS } from '../utils/attitude'
 import { splitMovement, computeEffectiveMaxSpeed, minMoveDistance } from '../game/movement'
+import { Select } from './Select'
+
+const TURN_DIRECTION_OPTIONS = [
+  { value: '', label: 'No turn', shortLabel: '–' },
+  { value: 'port', label: '← Port', shortLabel: '←P' },
+  { value: 'starboard', label: '→ Starboard', shortLabel: '→S' },
+]
 
 interface Props {
   unit: Unit
@@ -182,15 +189,14 @@ export function PlayerMovementPanel({ unit }: Props) {
               <span className="text-gray-500 w-8 shrink-0">{i + 1}:</span>
               <span className="text-gray-400 w-10 text-right">{chunkDists[i]}mm</span>
               <span className="text-gray-600 mx-0.5">→</span>
-              <select
+              <Select
                 value={turn.direction}
-                onChange={(e) => updateTurn(i, 'direction', e.target.value)}
-                className="w-12 bg-gray-800 border border-gray-700 rounded px-1 py-1 text-gray-200 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-              >
-                <option value="">-</option>
-                <option value="port">←P</option>
-                <option value="starboard">→S</option>
-              </select>
+                onChange={(direction) => updateTurn(i, 'direction', direction)}
+                size="sm"
+                className="w-14"
+                ariaLabel={`Chunk ${i + 1} turn direction`}
+                options={TURN_DIRECTION_OPTIONS}
+              />
               {turn.direction && (
                 <input
                   type="number"

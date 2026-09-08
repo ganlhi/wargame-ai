@@ -1,7 +1,8 @@
 import { useRef, useEffect, useCallback, useState } from 'react'
 import { Application, Graphics, Container } from 'pixi.js'
 import { useGameStore } from '../stores/gameStore'
-import { TERRAIN_COLORS } from './TerrainPanel'
+import { Select } from './Select'
+import { TERRAIN_COLORS, TERRAIN_TYPE_OPTIONS } from '../utils/terrainStyles'
 import type { GameState, TerrainType, UnitStatus } from '../types'
 import { arcSideToAngles } from '../types'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
@@ -792,7 +793,6 @@ export function GameCanvas({
   const selectedUnit = selectedUnitId
     ? currentGame?.units.find((u) => u.id === selectedUnitId)
     : undefined
-  const terrainTypes: TerrainType[] = ['island', 'shoal', 'reef']
 
   return (
     <div className="flex flex-col flex-1 relative">
@@ -862,17 +862,14 @@ export function GameCanvas({
           </div>
           <div className="space-y-1.5">
             <label className="block text-xs text-gray-300">Type</label>
-            <select
+            <Select<TerrainType>
               value={selectedTerrain.type}
-              onChange={(e) => updateTerrain(selectedTerrain.id, { type: e.target.value as TerrainType })}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-            >
-              {terrainTypes.map((type) => (
-                <option key={type} value={type}>
-                  {TERRAIN_COLORS[type].label}
-                </option>
-              ))}
-            </select>
+              onChange={(type) => updateTerrain(selectedTerrain.id, { type })}
+              size="sm"
+              className="w-full"
+              ariaLabel="Terrain type"
+              options={TERRAIN_TYPE_OPTIONS}
+            />
           </div>
           <div className="flex gap-2 mt-3">
             <button
@@ -962,18 +959,15 @@ export function GameCanvas({
                 ) : candidates.length > 0 ? (
                   <label className="block">
                     <span className="text-xs text-gray-400">Grapple with</span>
-                    <select
+                    <Select
                       value=""
-                      onChange={(e) => e.target.value && setGrapple(selectedUnit.id, e.target.value)}
-                      className="mt-1 w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-                    >
-                      <option value="">Select a ship…</option>
-                      {candidates.map((u) => (
-                        <option key={u.id} value={u.id}>
-                          {u.name}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(id) => id && setGrapple(selectedUnit.id, id)}
+                      placeholder="Select a ship…"
+                      size="sm"
+                      className="mt-1 w-full"
+                      ariaLabel="Grapple with"
+                      options={candidates.map((u) => ({ value: u.id, label: u.name }))}
+                    />
                   </label>
                 ) : (
                   <span className="text-xs text-gray-600">No other ships to grapple</span>

@@ -5,6 +5,7 @@ import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attit
 import { ARC_SIDES, arcSideLabel } from '../types'
 import type { Unit, UnitSide, AIStyle, UnitStatus, ArcSide, Attitude, SpeedRange } from '../types'
 import { OffsetInput } from './OffsetInput'
+import { Select } from './Select'
 import {
   centerFromSternMidpoint, fromOffset, originName, originPoint, sternMidpoint, toOffset,
 } from '../utils/coordinates'
@@ -240,31 +241,35 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
 
           <div>
             <label className="block text-xs text-gray-400 mb-1">Status</label>
-            <select
+            <Select<UnitStatus>
               value={status}
-              onChange={(e) => setStatus(e.target.value as UnitStatus)}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-            >
-              <option value="active">Active</option>
-              <option value="grappled">Grappled</option>
-              <option value="immobilised">Immobilised</option>
-              <option value="destroyed">Destroyed</option>
-              <option value="surrendered">Surrendered</option>
-            </select>
+              onChange={setStatus}
+              ariaLabel="Status"
+              className="w-full"
+              options={[
+                { value: 'active', label: 'Active' },
+                { value: 'grappled', label: 'Grappled' },
+                { value: 'immobilised', label: 'Immobilised' },
+                { value: 'destroyed', label: 'Destroyed' },
+                { value: 'surrendered', label: 'Surrendered' },
+              ]}
+            />
           </div>
 
           {side === 'ai' && (
             <div>
               <label className="block text-xs text-gray-400 mb-1">AI Style</label>
-              <select
+              <Select<AIStyle>
                 value={aiStyle}
-                onChange={(e) => setAiStyle(e.target.value as AIStyle)}
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-              >
-                <option value="aggressive">Aggressive</option>
-                <option value="cautious">Cautious</option>
-                <option value="defensive">Defensive</option>
-              </select>
+                onChange={setAiStyle}
+                ariaLabel="AI style"
+                className="w-full"
+                options={[
+                  { value: 'aggressive', label: 'Aggressive' },
+                  { value: 'cautious', label: 'Cautious' },
+                  { value: 'defensive', label: 'Defensive' },
+                ]}
+              />
             </div>
           )}
 

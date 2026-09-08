@@ -2,7 +2,7 @@
 
 > **Status as of 2026-09-08.** This plan has been reconciled with the code actually on `main`.
 >
-> **Phase 11 reshaped the model: the table is now infinite**, and **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
+> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, and **Phase 13** replaced native dropdowns with an anchored control that works on mobile. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
 > Legend: `[x]` done · `[~]` partially done / deviates from original plan · `[ ]` not started.
 > Items marked `[~]` or `[ ]` are consolidated as actionable work in **Phase 10 — Remaining Work**.
 
@@ -141,7 +141,7 @@ Ordered roughly by value-to-effort. Each item references the phase it completes.
 ### Polish / mobile (9.x)
 - [~] **10.11 Pinch-to-zoom & long-press context menu (9.1).** _Pan/zoom done in Phase 12; long-press context menu still open._
 - [ ] **10.12 Responsive portrait/landscape + bottom-sheet panels (9.2).**
-- [ ] **10.13 Accessibility (9.3)** — high-contrast mode, ARIA labels.
+- [~] **10.13 Accessibility (9.3)** — high-contrast mode still open; the `Select` control ships full keyboard support and listbox ARIA (Phase 13).
 - [ ] **10.14 Performance (9.4)** — code-split the ~560 kB bundle, sprite batching, lazy terrain rendering, debounced save.
 
 ### Code health
@@ -172,6 +172,14 @@ A model change rather than a feature: the table has no edges and no fixed size, 
 - [x] **12.3 First-turn minimum (rules).** `Unit.prevMoveDistance` is now `number | null`; `null` means no movement phase has resolved, which `minMoveDistance()` reads as "half the maximum". The helper is shared by the panel and `enumerateMovementPlans`, so the player and the AI are held to the same floor. Schema 6; pre-6 saves keep their stored number rather than gaining the rule mid-game.
 - [x] **12.4 Pan and zoom (9.1 / 10.11).** Drag empty water to pan, wheel/trackpad or pinch to zoom about the cursor, plus on-screen +/−/Fit controls. The view starts out following the content and switches to manual on the first gesture until **Fit** is pressed. Dragging from a ship or terrain piece still selects or moves it rather than panning, and a drag past the movement threshold suppresses the deselect that a tap would have caused.
 - [x] **12.5 Viewport extracted (code health).** The viewport model — `Viewport`, `contentPoints`, `computeViewport`, `toScreen`/`toWorld`, `panViewport`, `zoomViewport` — moved out of `GameCanvas` into `src/utils/viewport.ts`, where it is unit-tested (anchor pinning, clamping, auto-fit framing). The auto-fit result is also memoised per render pass; it used to be recomputed over all content once per point drawn.
+
+---
+
+## Phase 13 — Dropdowns That Open Where You Tapped
+
+- [x] **13.1 Custom `Select` (9.1).** On mobile, a native `<select>` hands its popup to the OS: a bottom sheet on iOS, a centred dialog on Android, and — inside a `transform`ed ancestor (the terrain context menu) or an `overflow` scroll container (the side rail, both modals) — sometimes anchored nowhere near the control. `src/components/Select.tsx` renders its list into a `document.body` portal positioned from the trigger's `getBoundingClientRect()`, which already accounts for ancestor transforms and cannot be clipped by an ancestor's overflow. It flips above the trigger when room below is short, follows the trigger through scroll and resize (capture-phase listener, so inner panels count), closes on outside press or Escape, and supports arrow/Home/End/Enter/Escape with `listbox`/`option` roles. All seven native selects are replaced.
+- [x] **13.2 Positioning extracted (code health).** `computeDropdownPosition` lives in `src/utils/dropdownPosition.ts` taking the viewport size as a parameter, so flipping, height capping and horizontal clamping are unit-tested without a DOM.
+- [x] **13.3 Terrain styles extracted.** `TERRAIN_COLORS` / `TERRAIN_TYPES` / `TERRAIN_TYPE_OPTIONS` moved from `TerrainPanel.tsx` to `src/utils/terrainStyles.ts`; three components were importing constants from a component module.
 
 ---
 

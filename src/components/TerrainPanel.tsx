@@ -1,12 +1,8 @@
 import { useGameStore } from '../stores/gameStore'
 import type { TerrainType } from '../types'
 import { formatOffset, originPoint, toOffset } from '../utils/coordinates'
-
-const TERRAIN_COLORS: Record<TerrainType, { fill: string; border: string; label: string }> = {
-  island: { fill: '#4ade80', border: '#22c55e', label: 'Island' },
-  shoal: { fill: '#fbbf24', border: '#f59e0b', label: 'Shoal' },
-  reef: { fill: '#f87171', border: '#ef4444', label: 'Reef' },
-}
+import { Select } from './Select'
+import { TERRAIN_COLORS, TERRAIN_TYPE_OPTIONS } from '../utils/terrainStyles'
 
 interface TerrainPanelProps {
   onAddClick: () => void
@@ -50,17 +46,13 @@ export function TerrainPanel({ onAddClick, onEditTerrain }: TerrainPanelProps) {
                 className="w-3 h-3 rounded-sm shrink-0"
                 style={{ backgroundColor: TERRAIN_COLORS[t.type].fill }}
               />
-              <select
+              <Select<TerrainType>
                 value={t.type}
-                onChange={(e) => updateTerrain(t.id, { type: e.target.value as TerrainType })}
-                className="bg-gray-800 border border-gray-700 rounded px-1.5 py-0.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
-              >
-                {(Object.keys(TERRAIN_COLORS) as TerrainType[]).map((type) => (
-                  <option key={type} value={type}>
-                    {TERRAIN_COLORS[type].label}
-                  </option>
-                ))}
-              </select>
+                onChange={(type) => updateTerrain(t.id, { type })}
+                size="sm"
+                ariaLabel="Terrain type"
+                options={TERRAIN_TYPE_OPTIONS}
+              />
               <span className="text-gray-400 flex-1 truncate">
                 {t.shape.kind === 'circle'
                   ? `⌀${t.shape.width}mm`
@@ -91,6 +83,3 @@ export function TerrainPanel({ onAddClick, onEditTerrain }: TerrainPanelProps) {
     </div>
   )
 }
-
-export { TERRAIN_COLORS }
-export type { TerrainType }
