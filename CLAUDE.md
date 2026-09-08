@@ -92,6 +92,12 @@ Because turning up into the wind requires this procedure, an ordinary movement o
 
 The player declares a tack with a single button, which fills in the whole movement plan for them.
 
+## Firing and reloading
+
+A ship fires one arc per turn, at the earliest chunk of its movement where the arc bears on a target in range.
+
+Reloading is tracked **per arc**, not per ship. An arc that fired on chunk N is loaded again on chunk N of the following turn — a full turn's work. The other arcs are unaffected: a starboard broadside fired on chunk 2 leaves the port guns free to fire from chunk 1. Any arc that does not fire during a turn is loaded by the next one.
+
 ## AI unit "style"
 
 Depending on its style, an AI controlled unit would make different decisions when it comes to move.

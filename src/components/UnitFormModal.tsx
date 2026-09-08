@@ -171,7 +171,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       playerOrder: null,
       hiddenAIFirePlan: null,
       hiddenAIAction: null,
-      lastFireChunk: null,
+      lastFireChunks: unit?.lastFireChunks ?? {},
       isInIrons: false,
       // Grapple is a mutual relationship managed via the canvas unit panel
       // (setGrapple), not edited here — preserve whatever it currently is.

@@ -8,6 +8,7 @@ import { TerrainPanel } from './TerrainPanel'
 import { PlayerMovementPanel } from './PlayerMovementPanel'
 import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
 import { arcSideLabel } from '../types'
+import type { ArcSide } from '../types'
 import { suggestMovement } from '../game/ai'
 import { originName } from '../utils/coordinates'
 import type { Unit } from '../types'
@@ -300,9 +301,20 @@ export function GameView() {
                             </p>
                           )
                         })()}
-                        {!aiUnit.hiddenAIFirePlan && aiUnit.lastFireChunk !== null && (
-                          <p className="text-gray-600 pt-1">Reloading (fired at chunk {aiUnit.lastFireChunk + 1} last turn)</p>
-                        )}
+                        {(() => {
+                          // Reloading is per arc, so name the arcs that are
+                          // still out and the chunk each comes back on.
+                          const reloading = (Object.entries(aiUnit.lastFireChunks) as [ArcSide, number][])
+                            .filter(([side]) => side !== aiUnit.hiddenAIFirePlan?.arcSide)
+                          if (reloading.length === 0) return null
+                          return (
+                            <p className="text-gray-600 pt-1">
+                              Reloading: {reloading
+                                .map(([side, chunk]) => `${arcSideLabel(side)} until chunk ${chunk + 1}`)
+                                .join(', ')}
+                            </p>
+                          )
+                        })()}
                       </div>
                     )}
                   </div>

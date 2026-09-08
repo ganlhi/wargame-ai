@@ -2,7 +2,7 @@
 
 > **Status as of 2026-09-08.** This plan has been reconciled with the code actually on `main`.
 >
-> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, **Phase 13** replaced native dropdowns with an anchored control that works on mobile, **Phase 14** corrected the attitude bands and added rig types, and **Phase 15** implemented the tacking procedure. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
+> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, **Phase 13** replaced native dropdowns with an anchored control that works on mobile, **Phase 14** corrected the attitude bands and added rig types, **Phase 15** implemented the tacking procedure, and **Phase 16** made reloading per arc. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
 > Legend: `[x]` done · `[~]` partially done / deviates from original plan · `[ ]` not started.
 > Items marked `[~]` or `[ ]` are consolidated as actionable work in **Phase 10 — Remaining Work**.
 
@@ -104,6 +104,7 @@
 ## Phase 8 — Firing & Combat
 
 - [~] **8.1** Firing arc visualization — _the AI's chosen fire arc is drawn on reveal (`GameCanvas.tsx`). General "draw all of a selected unit's arcs, green if enemy in range / red otherwise" is not implemented._
+- [x] **8.3** Per-arc reloading (Phase 16) — an arc that fired on chunk N reloads by chunk N next turn; other arcs are unaffected, and an arc that does not fire is loaded again by the following turn.
 - [~] **8.2** Combat resolution — _AI fire-plan computation (`computeAIFirePlan`, `checkFiringArc` in `src/game/combat.ts`) chunk-simulates both ships to find the first firing solution. **No damage/destruction automation** — outcomes (destroy/surrender/immobilise) are applied manually._
 
 ---
@@ -206,6 +207,15 @@ CLAUDE.md now spells out tacking as a committed procedure rather than a one-off 
 - [x] **15.6 Declare-tack button (7.3).** `PlayerMovementPanel` offers a one-press **Declare tack** when eligible, filling in the whole plan; mid-tack it locks the editor, states the swing and drift, and writes the forced continuation in automatically.
 
 - [x] **15.7 Tacking as an AI choice (6.1).** `scoreTack` judges a declared tack by the pose it ends in rather than the turn it starts, since the latter is always among the worst plans available. `projectTackCompletion` runs the procedure out to the new tack; the reward is broadside guns that would bear on an enemy at short range (more inside the close tier, more again for a rake), with the enemy carried forward the same number of turns at cruising speed. It is discounted `0.5` per turn the tack takes, vetoed if the drift ends on terrain, and cut to a quarter for a defensive ship. This closes the gap left when the procedure landed.
+
+---
+
+## Phase 16 — Reloading Per Arc
+
+- [x] **16.1 Ships stopped firing altogether (bug).** `revealOrders` carried `lastFireChunk` forward whenever a ship did not fire (`firePlan?.chunkIndex ?? u.lastFireChunk`), so the value never cleared. A ship that once fired on chunk 4 was pinned to chunk 4 for the rest of the game, and went silent as soon as nothing bore on that one chunk. Only the arc that fires is now left reloading; everything else is loaded again, which is what a full turn's reload actually buys.
+- [x] **16.2 Reloading is per arc (8.2).** `Unit.lastFireChunk: number | null` becomes `lastFireChunks: Partial<Record<ArcSide, number>>`, and the reload check moved from a ship-wide guard at the top of the chunk loop into `bestArcSide`, where it applies to the arc being considered. A starboard broadside fired on chunk 2 no longer silences the port guns. `schemaVersion` 9; the old field did not record which arc had fired, so it cannot be carried over and every arc starts loaded.
+- [x] **16.3 Reveal panel names the arcs.** "Reloading (fired at chunk N last turn)" becomes a per-arc list — "Reloading: Starboard until chunk 3".
+- [x] **16.4 Tests for `combat.ts`.** The module had none, which is how 16.1 survived. `combat.test.ts` covers bearing, range, arc choice by weight, own-side and out-of-the-fight targets, and the reload rules; `gameStore.test.ts` covers the clearing behaviour across turns.
 
 ---
 

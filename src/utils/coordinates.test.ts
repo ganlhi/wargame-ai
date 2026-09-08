@@ -32,7 +32,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     prevMoveDistance: 0,
     hiddenAIOrder: null,
     playerOrder: null,
-    lastFireChunk: null,
+    lastFireChunks: {},
     hiddenAIFirePlan: null,
     hiddenAIAction: null,
     ...overrides,

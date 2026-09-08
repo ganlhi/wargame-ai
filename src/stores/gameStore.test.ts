@@ -45,7 +45,7 @@ function makeUnit(id: string, overrides: Partial<Unit> = {}): Unit {
     prevMoveDistance: 0,
     hiddenAIOrder: null,
     playerOrder: null,
-    lastFireChunk: null,
+    lastFireChunks: {},
     hiddenAIFirePlan: null,
     hiddenAIAction: null,
     ...overrides,
@@ -239,5 +239,69 @@ describe('gameStore — tacking', () => {
     expect(after.attitude).toBe('beating')
     // Six turns at two points each: round through 12 points onto the new tack.
     expect(after.orientation).toBe(26)
+  })
+})
+
+describe('gameStore — reloading', () => {
+  const STATIONARY = {
+    chunks: [{ distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }],
+    totalTurnPoints: 0,
+    effectiveMaxSpeed: 0,
+  } as Unit['hiddenAIOrder']
+
+  const BROADSIDES = [
+    { id: 'p', side: 'port' as const, maxRange: 300, weapons: 10 },
+    { id: 's', side: 'starboard' as const, maxRange: 300, weapons: 10 },
+  ]
+
+  const ai = () => store().currentGame!.units.find((u) => u.id === 'ai1')!
+
+  beforeEach(() => {
+    localStorage.clear()
+    useGameStore.setState({ savedGames: [], currentGame: null, hasUnsavedChanges: false })
+    store().createGame('Test')
+    // Bow north, so the starboard broadside bears on a ship lying due east.
+    store().addUnit(makeUnit('ai1', { side: 'ai', orientation: 0, firingArcs: BROADSIDES }))
+    store().addUnit(makeUnit('p1', { position: { x: 200, y: 0 }, firingArcs: BROADSIDES }))
+    store().startGame()
+  })
+
+  /** Reveal with a stationary AI order, so only the guns are under test. */
+  const reveal = () => {
+    store().updateUnit('ai1', { hiddenAIOrder: STATIONARY })
+    store().revealOrders()
+    return ai()
+  }
+
+  it('records which arc fired and on which chunk', () => {
+    store().updateUnit('ai1', { lastFireChunks: { starboard: 3 } })
+    const after = reveal()
+    expect(after.hiddenAIFirePlan).toMatchObject({ arcSide: 'starboard', chunkIndex: 3 })
+    expect(after.lastFireChunks).toEqual({ starboard: 3 })
+  })
+
+  it('loads every arc again after a turn in which the ship did not fire', () => {
+    // Fired late last turn, and this turn there is nothing to shoot at.
+    store().updateUnit('ai1', { lastFireChunks: { starboard: 4 } })
+    store().updateUnit('p1', { position: { x: 100000, y: 0 } })
+
+    const idle = reveal()
+    expect(idle.hiddenAIFirePlan).toBeNull()
+    expect(idle.lastFireChunks).toEqual({})
+
+    // With the enemy back alongside, she fires from the first chunk again
+    // rather than staying stuck on chunk 4 for the rest of the game.
+    store().resolveTurn()
+    store().updateUnit('p1', { position: { x: 200, y: 0 } })
+    expect(reveal().hiddenAIFirePlan).toMatchObject({ arcSide: 'starboard', chunkIndex: 0 })
+  })
+
+  it('frees the arc that did not fire, holding only the one that did', () => {
+    store().updateUnit('ai1', { lastFireChunks: { starboard: 2 } })
+    store().addUnit(makeUnit('p2', { position: { x: -200, y: 0 }, firingArcs: BROADSIDES }))
+
+    const after = reveal()
+    expect(after.hiddenAIFirePlan).toMatchObject({ targetId: 'p2', arcSide: 'port', chunkIndex: 0 })
+    expect(after.lastFireChunks).toEqual({ port: 0 })
   })
 })

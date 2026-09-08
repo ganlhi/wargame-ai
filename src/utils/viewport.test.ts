@@ -17,7 +17,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     driftSpeed: 10, baseWidth: 30, baseLength: 80, firingArcs: [],
     attitude: 'reaching', isInIrons: false, grappledWith: null, tackDirection: null,
     prevAttitude: 'reaching', prevMoveDistance: null,
-    hiddenAIOrder: null, playerOrder: null, lastFireChunk: null,
+    hiddenAIOrder: null, playerOrder: null, lastFireChunks: {},
     hiddenAIFirePlan: null, hiddenAIAction: null,
     ...overrides,
   }

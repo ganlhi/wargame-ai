@@ -1,4 +1,4 @@
-import type { GameState, TableTerrain, TerrainShape } from '../types'
+import type { ArcSide, GameState, TableTerrain, TerrainShape } from '../types'
 import { tackTurnDirection } from '../game/movement'
 
 /**
@@ -14,8 +14,11 @@ import { tackTurnDirection } from '../game/movement'
  *     sail, and it is what the old single set of attitude bands described.
  * 8 — `Unit.tackDirection` added. A ship already in irons in an older save has
  *     no recorded swing direction, so one is derived from its heading.
+ * 9 — reloading is tracked per arc (`lastFireChunks`) rather than per ship
+ *     (`lastFireChunk`). The old value did not record which arc had fired, so
+ *     it cannot be carried over; every arc starts loaded instead.
  */
-export const CURRENT_SCHEMA_VERSION = 8
+export const CURRENT_SCHEMA_VERSION = 9
 
 type RawRecord = Record<string, unknown>
 
@@ -104,7 +107,7 @@ export function migrateSavedGame(raw: RawRecord): GameState {
     baseWidth: u.baseWidth ?? 30,
     baseLength: u.baseLength ?? 80,
     grappledWith: u.grappledWith ?? null,
-    lastFireChunk: u.lastFireChunk ?? null,
+    lastFireChunks: (u.lastFireChunks ?? {}) as Partial<Record<ArcSide, number>>,
     hiddenAIFirePlan: u.hiddenAIFirePlan ?? null,
     hiddenAIAction: u.hiddenAIAction ?? null,
     firingArcs: ((u.firingArcs ?? []) as RawRecord[]).map((a) => ({

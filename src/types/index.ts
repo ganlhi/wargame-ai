@@ -152,7 +152,14 @@ export interface Unit {
   prevMoveDistance: number | null
   hiddenAIOrder: MovementPlan | null
   playerOrder: MovementPlan | null
-  lastFireChunk: number | null
+  /**
+   * For each broadside or chase arc, the chunk it last fired on — and so the
+   * chunk it becomes loaded again on, a full turn later. Reloading is tracked
+   * per arc, not per ship: a starboard broadside fired on chunk 2 leaves the
+   * port guns free to fire from chunk 0. An arc with no entry is loaded, and
+   * every arc that does not fire in a turn is loaded again by the next one.
+   */
+  lastFireChunks: Partial<Record<ArcSide, number>>
   hiddenAIFirePlan: FirePlan | null
   hiddenAIAction: AIAction | null
 }

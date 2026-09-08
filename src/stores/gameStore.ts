@@ -355,7 +355,12 @@ export const useGameStore = create<GameStore>()(
             ...u,
             hiddenAIFirePlan: firePlan,
             hiddenAIAction: action,
-            lastFireChunk: firePlan?.chunkIndex ?? u.lastFireChunk,
+            // Only the arc that fires this turn is left reloading. Everything
+            // else is loaded again: a full turn has passed since it last fired,
+            // which is exactly what the reload costs. Carrying the old value
+            // forward was what left a ship that fired late in one turn unable
+            // to fire at all afterwards.
+            lastFireChunks: firePlan ? { [firePlan.arcSide]: firePlan.chunkIndex } : {},
           }
         })
 

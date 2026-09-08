@@ -75,7 +75,16 @@ export function computeAIFirePlan(
   allUnits: Unit[],
   windDirection: number,
 ): { targetId: string; chunkIndex: number; arcSide: ArcSide } | null {
-  function bestArcSide(firer: Unit, target: Unit): { arcSide: ArcSide; weapons: number } | null {
+  /**
+   * The heaviest arc that bears on `target` and is loaded by chunk `ci`. An arc
+   * that fired on chunk N last turn is not loaded again until chunk N comes
+   * round, and only that arc is held back — the other side can fire meanwhile.
+   */
+  function bestArcSide(
+    firer: Unit,
+    target: Unit,
+    ci: number,
+  ): { arcSide: ArcSide; weapons: number } | null {
     let best: { arcSide: ArcSide; weapons: number } | null = null
     const dist = distance(firer.position, target.position)
     const firerH = headingDeg(firer.orientation)
@@ -83,6 +92,8 @@ export function computeAIFirePlan(
     const relAngle = relativeAngle(firerH, angleToTarget)
     for (const arc of firer.firingArcs) {
       if (dist > arc.maxRange) continue
+      const reloadedAt = firer.lastFireChunks[arc.side]
+      if (reloadedAt !== undefined && ci < reloadedAt) continue
       const a = arcSideToAngles(arc.side)
       if (!inArc(relAngle, a.minAngle, a.maxAngle)) continue
       const weapons = arc.weapons || 1
@@ -105,8 +116,6 @@ export function computeAIFirePlan(
     aiPos = result.position
     aiOrient = result.orientation
 
-    if (aiUnit.lastFireChunk !== null && ci < aiUnit.lastFireChunk) continue
-
     const simulatedAI: Unit = { ...aiUnit, position: aiPos, orientation: aiOrient, isInIrons: aiIrons }
 
     for (const pu of allUnits) {
@@ -126,7 +135,7 @@ export function computeAIFirePlan(
       }
 
       const simulatedPU: Unit = { ...pu, position: puPos, orientation: puOrient, isInIrons: puIrons }
-      const best = bestArcSide(simulatedAI, simulatedPU)
+      const best = bestArcSide(simulatedAI, simulatedPU, ci)
       if (best) {
         return { targetId: pu.id, chunkIndex: ci, arcSide: best.arcSide }
       }
