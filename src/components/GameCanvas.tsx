@@ -544,8 +544,11 @@ export function GameCanvas({
       const pathG = new Graphics()
       pathG.moveTo(startPos.x, startPos.y)
 
+      // A declared tack drifts from its first chunk, even though the ship is
+      // still beating as the turn opens.
+      const drifting = u.isInIrons || !!plan.isTack
       for (const chunk of plan.chunks) {
-        if (u.isInIrons) {
+        if (drifting) {
           const drift = driftVector(currentGame.windDirection)
           // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
           const driftPerChunk = (u.driftSpeed ?? 10) / 5

@@ -1,6 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import {
-  getInIronsTurnDirection,
+  buildTackPlan,
+  canTack,
+  windSide,
   splitMovement,
   computeEffectiveMaxSpeed,
   orientationToVector,
@@ -38,6 +40,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     attitude: 'reaching',
     isInIrons: false,
     grappledWith: null,
+    tackDirection: null,
     prevAttitude: 'reaching',
     prevMoveDistance: 0,
     hiddenAIOrder: null,
@@ -240,28 +243,149 @@ describe('enumerateMovementPlans — minimum move', () => {
   })
 })
 
-describe('getInIronsTurnDirection', () => {
-  // The turn direction branches on whether the ship is beating, so its band
-  // boundary has to track computeAttitude's — otherwise a square-rigged ship at
-  // 5 points off the wind would be "in irons" to one and "beating" to the other.
-  it('treats a heading as beating exactly when computeAttitude does', () => {
-    for (const rig of [false, true]) {
-      for (let wind = 0; wind < 32; wind += 3) {
-        for (let orientation = 0; orientation < 32; orientation++) {
-          const attitude = computeAttitude(wind, orientation, rig)
-          if (attitude !== 'in_irons' && attitude !== 'beating') continue
-          const dir = getInIronsTurnDirection(orientation, wind, rig)
-          expect(dir === 'port' || dir === 'starboard').toBe(true)
-        }
+describe('tacking procedure', () => {
+  // Wind from the north (0). Orientation 6 (ENE) is 6 points off it, with the
+  // wind on the port bow — beating for a square rig, and the shallowest angle
+  // one can hold. Coming about therefore swings to port, through 12 points.
+  const beating = (o: Partial<Unit> = {}) =>
+    makeUnit({
+      orientation: 6,
+      attitude: 'beating',
+      prevAttitude: 'beating',
+      maxTurnPoints: 6,
+      driftSpeed: 50,
+      ...o,
+    })
+
+  describe('canTack', () => {
+    it('allows it after a turn spent entirely beating', () => {
+      expect(canTack(beating(), 'beating')).toBe(true)
+    })
+
+    it('refuses when the turn did not both start and end beating', () => {
+      // Ended beating but started on a reach.
+      expect(canTack(beating(), 'reaching')).toBe(false)
+      // Started beating but ended on a reach.
+      expect(canTack(beating({ attitude: 'reaching' }), 'beating')).toBe(false)
+    })
+
+    it('refuses a ship already in irons, or one that cannot move', () => {
+      expect(canTack(beating({ isInIrons: true }), 'beating')).toBe(false)
+      for (const status of ['immobilised', 'destroyed', 'surrendered', 'grappled'] as const) {
+        expect(canTack(beating({ status }), 'beating')).toBe(false)
       }
-    }
+    })
   })
 
-  it('swings a square rig the other way than a fore-and-aft rig at 5 points off', () => {
-    // Wind from N (0); orientation 5 is 5 points off, the one heading where the
-    // two rigs disagree, so they take opposite branches.
-    expect(computeAttitude(0, 5, false)).toBe('in_irons')
-    expect(computeAttitude(0, 5, true)).toBe('beating')
-    expect(getInIronsTurnDirection(5, 0, false)).not.toBe(getInIronsTurnDirection(5, 0, true))
+  describe('buildTackPlan', () => {
+    it('turns toward the wind, with no way on', () => {
+      const plan = buildTackPlan(beating(), 0)
+      expect(plan.isTack).toBe(true)
+      expect(plan.chunks.every((c) => c.distance === 0)).toBe(true)
+      // Wind on the port bow, so the bow swings to port through it.
+      for (const chunk of plan.chunks) {
+        if (chunk.turn) expect(chunk.turn.direction).toBe('port')
+      }
+    })
+
+    it('splits the swing across at most two turns, as the movement rules require', () => {
+      const plan = buildTackPlan(beating(), 0)
+      expect(plan.chunks.filter((c) => c.turn).length).toBeLessThanOrEqual(2)
+    })
+
+    it('stops on the new tack rather than swinging past it into a reach', () => {
+      // From 6 points to starboard, coming onto the new tack takes 12 points;
+      // a ship with 20 available must not use them all and overshoot.
+      const plan = buildTackPlan(beating({ maxTurnPoints: 20 }), 0)
+      const result = applyMovementPlan(beating({ maxTurnPoints: 20 }), plan, 0)
+      expect(result.attitude).toBe('beating')
+      expect(result.tackDirection).toBeNull()
+      expect(result.isInIrons).toBe(false)
+    })
+
+    it('keeps swinging the way the tack started, not the way the geometry suggests', () => {
+      // Head to wind, mid-tack to starboard. The geometry alone cannot say which
+      // way the ship arrived, so only the remembered direction gets this right.
+      const unit = makeUnit({ orientation: 0, isInIrons: true, tackDirection: 'starboard', maxTurnPoints: 2 })
+      const plan = buildTackPlan(unit, 0)
+      for (const chunk of plan.chunks) {
+        if (chunk.turn) expect(chunk.turn.direction).toBe('starboard')
+      }
+    })
+  })
+
+  describe('applyMovementPlan with a tack', () => {
+    it('drifts downwind from the first chunk, though the ship starts beating', () => {
+      const unit = beating({ position: { x: 0, y: 0 }, maxTurnPoints: 2 })
+      const result = applyMovementPlan(unit, buildTackPlan(unit, 0), 0)
+      // Wind from the north blows toward the south: the full 50mm of drift.
+      expect(result.position).toEqual({ x: 0, y: 50 })
+      expect(result.distanceTraveled).toBe(0)
+    })
+
+    it('leaves the ship in irons, still swinging the same way, when one turn is not enough', () => {
+      const unit = beating({ maxTurnPoints: 2 })
+      const result = applyMovementPlan(unit, buildTackPlan(unit, 0), 0)
+      expect(result.attitude).toBe('in_irons')
+      expect(result.isInIrons).toBe(true)
+      expect(result.tackDirection).toBe('port')
+    })
+
+    it('comes about over several turns, drifting the whole way', () => {
+      let unit = beating({ position: { x: 0, y: 0 }, maxTurnPoints: 2 })
+      const attitudes: string[] = []
+      let turns = 0
+      while (turns < 10) {
+        const result = applyMovementPlan(unit, buildTackPlan(unit, 0), 0)
+        unit = {
+          ...unit,
+          position: result.position,
+          orientation: result.orientation,
+          attitude: result.attitude,
+          isInIrons: result.isInIrons,
+          tackDirection: result.tackDirection,
+        }
+        attitudes.push(result.attitude)
+        turns++
+        // Never any way on: the ship only ever drifts.
+        expect(result.distanceTraveled).toBe(0)
+        if (!result.isInIrons) break
+      }
+      // It finished, on the far tack, having gone through irons on the way.
+      expect(unit.isInIrons).toBe(false)
+      expect(unit.tackDirection).toBeNull()
+      expect(unit.attitude).toBe('beating')
+      expect(attitudes).toContain('in_irons')
+      // Wind on the starboard bow now — the other side from where it started.
+      expect(windSide(unit.orientation, 0)).toBe('starboard')
+      // Pushed steadily downwind the whole time.
+      expect(unit.position.y).toBe(50 * turns)
+    })
+  })
+
+  describe('enumerateMovementPlans and tacking', () => {
+    it('offers a tack to a ship that spent the last turn beating', () => {
+      const plans = enumerateMovementPlans(beating(), 0, 'beating')
+      expect(plans.filter((p) => p.isTack)).toHaveLength(1)
+    })
+
+    it('offers none to a ship that did not', () => {
+      expect(enumerateMovementPlans(beating(), 0, 'reaching').some((p) => p.isTack)).toBe(false)
+    })
+
+    it('gives a ship mid-tack exactly one option: keep coming about', () => {
+      const unit = makeUnit({ orientation: 2, isInIrons: true, tackDirection: 'port' })
+      const plans = enumerateMovementPlans(unit, 0, 'beating')
+      expect(plans).toHaveLength(1)
+      expect(plans[0].isTack).toBe(true)
+    })
+
+    it('never offers an ordinary order that would leave the ship in irons', () => {
+      const unit = beating()
+      for (const plan of enumerateMovementPlans(unit, 0, 'beating')) {
+        if (plan.isTack) continue
+        expect(applyMovementPlan(unit, plan, 0).attitude).not.toBe('in_irons')
+      }
+    })
   })
 })

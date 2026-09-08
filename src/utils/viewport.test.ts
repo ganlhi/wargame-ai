@@ -15,7 +15,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
       quarter_reaching: { max: 100 }, running: { max: 90 },
     },
     driftSpeed: 10, baseWidth: 30, baseLength: 80, firingArcs: [],
-    attitude: 'reaching', isInIrons: false, grappledWith: null,
+    attitude: 'reaching', isInIrons: false, grappledWith: null, tackDirection: null,
     prevAttitude: 'reaching', prevMoveDistance: null,
     hiddenAIOrder: null, playerOrder: null, lastFireChunk: null,
     hiddenAIFirePlan: null, hiddenAIAction: null,

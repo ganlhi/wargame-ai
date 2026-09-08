@@ -55,10 +55,13 @@ export function contentPoints(game: GameState): Point[] {
 
     const plan = u.hiddenAIOrder ?? u.playerOrder
     if (!plan) continue
+    // A declared tack drifts from its first chunk, even though the ship is
+    // still beating as the turn opens.
+    const drifting = u.isInIrons || !!plan.isTack
     let orient = u.orientation
     let p = { ...u.position }
     for (const chunk of plan.chunks) {
-      if (u.isInIrons) {
+      if (drifting) {
         const drift = driftVector(game.windDirection)
         p = {
           x: p.x + drift.dx * ((u.driftSpeed ?? 10) / 5),

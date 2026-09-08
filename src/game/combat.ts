@@ -11,8 +11,7 @@ export interface FiringResult {
   weapons: number
 }
 
-import { orientationToVector, driftVector, getInIronsTurnDirection } from './movement'
-import { computeAttitude } from '../utils/attitude'
+import { orientationToVector, driftVector } from './movement'
 
 export function checkFiringArc(firer: Unit, target: Unit): FiringResult {
   const dist = distance(firer.position, target.position)
@@ -44,14 +43,11 @@ function simulateChunk(
   chunk: { distance: number; turn?: { direction: 'port' | 'starboard'; points: number } },
   windDirection: number,
   driftSpeed: number,
-  maxTurnPoints: number,
-  foreAndAftRigged: boolean,
-): { position: { x: number; y: number }; orientation: number; isInIrons: boolean } {
+): { position: { x: number; y: number }; orientation: number } {
   let { x, y } = pos
   let orient = orientation
-  let irons = isInIrons
 
-  if (irons) {
+  if (isInIrons) {
     const drift = driftVector(windDirection)
     // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
     const driftPerChunk = driftSpeed / 5
@@ -63,23 +59,15 @@ function simulateChunk(
     y += vec.dy * chunk.distance
   }
 
-  if (irons) {
-    // Shared with movement resolution rather than re-derived here: the two used
-    // to hold separate copies of this, which the rig-dependent band boundary
-    // would have silently pulled apart.
-    const dir = getInIronsTurnDirection(orient, windDirection, foreAndAftRigged)
-    const pts = Math.ceil(maxTurnPoints / 2)
-    orient = dir === 'port'
-      ? (orient - pts + 32) % 32
-      : (orient + pts) % 32
-    const newAtt = computeAttitude(windDirection, orient, foreAndAftRigged)
-    if (newAtt === 'beating') irons = false
-  } else if (chunk.turn) {
+  // Every turn, tack included, is carried by the plan itself, so there is no
+  // separate in-irons swing to re-derive here. A tack resolves only at the end
+  // of a turn, so drifting-or-sailing does not change part-way through.
+  if (chunk.turn) {
     const dir = chunk.turn.direction === 'port' ? -1 : 1
     orient = (orient + dir * chunk.turn.points + 32) % 32
   }
 
-  return { position: { x, y }, orientation: orient, isInIrons: irons }
+  return { position: { x, y }, orientation: orient }
 }
 
 export function computeAIFirePlan(
@@ -109,14 +97,13 @@ export function computeAIFirePlan(
 
   let aiPos = aiUnit.position
   let aiOrient = aiUnit.orientation
-  let aiIrons = aiUnit.isInIrons
+  const aiIrons = aiUnit.isInIrons || !!aiPlan.isTack
 
   for (let ci = 0; ci < aiPlan.chunks.length; ci++) {
     const chunk = aiPlan.chunks[ci]
-    const result = simulateChunk(aiPos, aiOrient, aiIrons, chunk, windDirection, aiUnit.driftSpeed, aiUnit.maxTurnPoints, aiUnit.foreAndAftRigged)
+    const result = simulateChunk(aiPos, aiOrient, aiIrons, chunk, windDirection, aiUnit.driftSpeed)
     aiPos = result.position
     aiOrient = result.orientation
-    aiIrons = result.isInIrons
 
     if (aiUnit.lastFireChunk !== null && ci < aiUnit.lastFireChunk) continue
 
@@ -126,25 +113,16 @@ export function computeAIFirePlan(
       if (pu.side !== 'player' || pu.status === 'destroyed' || pu.status === 'surrendered') continue
       const puPlan = pu.playerOrder
 
-      let puPos: { x: number; y: number }
-      let puOrient: number
-      let puIrons: boolean
+      let puPos = pu.position
+      let puOrient = pu.orientation
+      const puIrons = pu.isInIrons || !!puPlan?.isTack
 
       if (puPlan) {
-        puPos = pu.position
-        puOrient = pu.orientation
-        puIrons = pu.isInIrons
         for (let pci = 0; pci <= ci; pci++) {
-          const pc = puPlan.chunks[pci]
-          const puResult = simulateChunk(puPos, puOrient, puIrons, pc, windDirection, pu.driftSpeed, pu.maxTurnPoints, pu.foreAndAftRigged)
+          const puResult = simulateChunk(puPos, puOrient, puIrons, puPlan.chunks[pci], windDirection, pu.driftSpeed)
           puPos = puResult.position
           puOrient = puResult.orientation
-          puIrons = puResult.isInIrons
         }
-      } else {
-        puPos = pu.position
-        puOrient = pu.orientation
-        puIrons = pu.isInIrons
       }
 
       const simulatedPU: Unit = { ...pu, position: puPos, orientation: puOrient, isInIrons: puIrons }

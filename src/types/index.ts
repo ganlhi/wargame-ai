@@ -135,6 +135,14 @@ export interface Unit {
   isInIrons: boolean
   // Id of the unit this one is grappled to (mutual). null when not grappled.
   grappledWith: string | null
+  /**
+   * While a tack is under way, the direction the ship is swinging. The rules
+   * require it to keep turning the same way until it is beating on the far
+   * side, and the geometry alone is ambiguous — a ship head to wind could have
+   * arrived there from either tack — so the direction has to be remembered
+   * rather than re-derived. null when not tacking.
+   */
+  tackDirection: 'port' | 'starboard' | null
   prevAttitude: Attitude
   /**
    * Distance actually covered in the last movement phase, which sets this
@@ -161,6 +169,13 @@ export interface MovementPlan {
   chunks: [MoveChunk, MoveChunk, MoveChunk, MoveChunk, MoveChunk]
   totalTurnPoints: number
   effectiveMaxSpeed: number
+  /**
+   * A declared tack: the ship carries no way on for the whole turn, drifting
+   * downwind while it swings through the wind. Set from the moment the tack is
+   * declared, which is why it can't be inferred from the ship's current
+   * attitude — on that first turn the ship is still beating.
+   */
+  isTack?: boolean
 }
 
 export interface GameState {

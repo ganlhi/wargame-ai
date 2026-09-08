@@ -1,4 +1,5 @@
 import type { GameState, TableTerrain, TerrainShape } from '../types'
+import { tackTurnDirection } from '../game/movement'
 
 /**
  * Bump this whenever the persisted save shape changes, and add the
@@ -11,8 +12,10 @@ import type { GameState, TableTerrain, TerrainShape } from '../types'
  *     been resolved yet, which gives a half-of-maximum minimum move.
  * 7 — `Unit.foreAndAftRigged` added. Square rig is the default for the age of
  *     sail, and it is what the old single set of attitude bands described.
+ * 8 — `Unit.tackDirection` added. A ship already in irons in an older save has
+ *     no recorded swing direction, so one is derived from its heading.
  */
-export const CURRENT_SCHEMA_VERSION = 7
+export const CURRENT_SCHEMA_VERSION = 8
 
 type RawRecord = Record<string, unknown>
 
@@ -78,6 +81,7 @@ function migrateTerrain(raw: RawRecord): TableTerrain {
  */
 export function migrateSavedGame(raw: RawRecord): GameState {
   const settings = (raw.settings ?? {}) as RawRecord
+  const windDirection = (raw.windDirection ?? settings.windDirection ?? 0) as number
 
   const terrain = ((raw.terrain ?? []) as RawRecord[]).map(migrateTerrain)
   const units = ((raw.units ?? []) as RawRecord[]).map((u) => ({
@@ -91,6 +95,12 @@ export function migrateSavedGame(raw: RawRecord): GameState {
     playerOrder: u.playerOrder ?? null,
     driftSpeed: u.driftSpeed ?? 10,
     foreAndAftRigged: u.foreAndAftRigged ?? false,
+    // A ship already in irons in a pre-8 save has no recorded swing direction.
+    // Deriving it from its heading sends it out on the tack it is nearer to,
+    // which is the only sensible reading of a state the save never captured.
+    tackDirection:
+      (u.tackDirection as 'port' | 'starboard' | null | undefined) ??
+      (u.isInIrons ? tackTurnDirection(Number(u.orientation ?? 0), windDirection) : null),
     baseWidth: u.baseWidth ?? 30,
     baseLength: u.baseLength ?? 80,
     grappledWith: u.grappledWith ?? null,
@@ -119,7 +129,7 @@ export function migrateSavedGame(raw: RawRecord): GameState {
     updatedAt: raw.updatedAt as string,
     schemaVersion: CURRENT_SCHEMA_VERSION,
     originId,
-    windDirection: (raw.windDirection ?? settings.windDirection ?? 0) as number,
+    windDirection,
     terrain,
     units,
     currentTurn: (raw.currentTurn ?? 1) as number,

@@ -16,6 +16,7 @@ class MemoryStorage {
 globalThis.localStorage = new MemoryStorage() as unknown as Storage
 
 const { useGameStore } = await import('./gameStore')
+const { buildTackPlan } = await import('../game/movement')
 
 function makeUnit(id: string, overrides: Partial<Unit> = {}): Unit {
   return {
@@ -39,6 +40,7 @@ function makeUnit(id: string, overrides: Partial<Unit> = {}): Unit {
     attitude: 'reaching',
     isInIrons: false,
     grappledWith: null,
+    tackDirection: null,
     prevAttitude: 'reaching',
     prevMoveDistance: 0,
     hiddenAIOrder: null,
@@ -172,5 +174,70 @@ describe('gameStore — turn resolution on an infinite table', () => {
     store().resolveTurn()
 
     expect(store().currentGame!.units[0].position.x).toBe(-100)
+  })
+})
+
+describe('gameStore — tacking', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    useGameStore.setState({ savedGames: [], currentGame: null, hasUnsavedChanges: false })
+    store().createGame('Test')
+  })
+
+  const resolve = () => {
+    store().revealOrders()
+    store().resolveTurn()
+    return store().currentGame!.units[0]
+  }
+
+  /** Wind from the north; orientation 6 is beating with the wind on the port bow. */
+  const setUpBeatingShip = (overrides: Partial<Unit> = {}) => {
+    store().addUnit(makeUnit('u1', { orientation: 6, maxTurnPoints: 2, driftSpeed: 50, ...overrides }))
+    store().setWindDirection(0)
+    store().startGame()
+    return store().currentGame!.units[0]
+  }
+
+  it('carries a declared tack through resolution: drifting, in irons, still swinging', () => {
+    const unit = setUpBeatingShip()
+    expect(unit.attitude).toBe('beating')
+
+    store().setPlayerOrder('u1', buildTackPlan(unit, 0))
+    const after = resolve()
+
+    expect(after.isInIrons).toBe(true)
+    expect(after.tackDirection).toBe('port')
+    expect(after.attitude).toBe('in_irons')
+    // Wind from the north pushes her south, and she makes no way of her own.
+    expect(after.position.y).toBe(50)
+    expect(after.prevMoveDistance).toBe(0)
+  })
+
+  it('keeps a mid-tack ship coming about even with no order entered', () => {
+    const unit = setUpBeatingShip()
+    store().setPlayerOrder('u1', buildTackPlan(unit, 0))
+
+    let after = resolve()
+    const swungTo = after.orientation
+    // No order at all for the next turn — the tack must continue regardless.
+    after = resolve()
+
+    expect(after.orientation).not.toBe(swungTo)
+    expect(after.position.y).toBe(100)
+    expect(after.tackDirection).toBe('port')
+  })
+
+  it('completes the tack on the far side and hands control back', () => {
+    const unit = setUpBeatingShip()
+    store().setPlayerOrder('u1', buildTackPlan(unit, 0))
+
+    let after = resolve()
+    for (let turn = 0; turn < 10 && after.isInIrons; turn++) after = resolve()
+
+    expect(after.isInIrons).toBe(false)
+    expect(after.tackDirection).toBeNull()
+    expect(after.attitude).toBe('beating')
+    // Six turns at two points each: round through 12 points onto the new tack.
+    expect(after.orientation).toBe(26)
   })
 })

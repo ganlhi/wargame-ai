@@ -2,7 +2,7 @@
 
 > **Status as of 2026-09-08.** This plan has been reconciled with the code actually on `main`.
 >
-> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, **Phase 13** replaced native dropdowns with an anchored control that works on mobile, and **Phase 14** corrected the attitude bands and added rig types. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
+> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, **Phase 13** replaced native dropdowns with an anchored control that works on mobile, **Phase 14** corrected the attitude bands and added rig types, and **Phase 15** implemented the tacking procedure. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
 > Legend: `[x]` done · `[~]` partially done / deviates from original plan · `[ ]` not started.
 > Items marked `[~]` or `[ ]` are consolidated as actionable work in **Phase 10 — Remaining Work**.
 
@@ -77,7 +77,7 @@
 - [x] **5.3** `computeEffectiveMaxSpeed(baseMaxSpeed, turnPoints)` — 5% penalty per turn point
 - [x] **5.4** `splitMovement(distance)` — 5 whole chunks, larger first
 - [x] **5.5** `applyMovementPlan(...)` — walks 5 chunks and returns position/orientation/attitude/isInIrons/**distanceTraveled**/path/poses. _Phase 11 removed the table arguments, the per-chunk edge clamping and `hitBoundary`: positions are unbounded and may go negative._
-- [x] **5.6** Voluntary in-irons rule — drift downwind, keep turning until beating on the other tack (in `enumerateMovementPlans` + `applyMovementPlan`). _`driftSpeed` is the **total drift per turn**; per-chunk loops apply `driftSpeed / 5` and full-turn projections apply `driftSpeed`. This is applied consistently across resolution (`movement.ts`), fire simulation (`combat.ts`), the ghost-path preview (`GameCanvas.tsx`), and AI lookahead (`ai.ts`)._
+- [x] **5.6** Tacking procedure (rewritten in Phase 15; previously "voluntary in-irons") — drift downwind, keep turning until beating on the other tack (in `enumerateMovementPlans` + `applyMovementPlan`). _`driftSpeed` is the **total drift per turn**; per-chunk loops apply `driftSpeed / 5` and full-turn projections apply `driftSpeed`. This is applied consistently across resolution (`movement.ts`), fire simulation (`combat.ts`), the ghost-path preview (`GameCanvas.tsx`), and AI lookahead (`ai.ts`)._
 - [x] **5.7** `enumerateMovementPlans(...)` — brute-forces distances × 1–2 turns at any chunk boundary, plus in-irons / voluntary-in-irons plans
 
 ---
@@ -190,6 +190,21 @@ CLAUDE.md's attitude bands were corrected: a square rig is in irons out to **5**
 - [x] **14.1 Rig-dependent bands (5.1).** `computeAttitude(wind, orientation, foreAndAftRigged)` now takes the rig; `inIronsLimit()` and `pointsOffWind()` are split out so the boundary lives in one place. The parameter is **required**, not defaulted, so the compiler flagged all thirteen call sites rather than letting any silently keep the old bands. This also resolves the attitude report from Phase 12: a square-rigged ship heading NWbN with the wind blowing toward E is 5 points off, and is now correctly in irons.
 - [x] **14.2 `Unit.foreAndAftRigged` (2.1 / 4.1).** New boolean, edited as a Square / Fore & Aft toggle in `UnitFormModal` (with the resulting boundary spelled out under it), defaulted to square by `migrateSavedGame` at `schemaVersion` 7 — square rig is both the age-of-sail default and what the old single set of bands described.
 - [x] **14.3 In-irons swing follows the same boundary.** `getInIronsTurnDirection` branched on a hardcoded 5–7 beating band, and `combat.ts` held a second inlined copy of it. Both now use the shared rig-aware helper exported from `movement.ts`, with a test asserting the two agree with `computeAttitude` across every wind/heading/rig combination — the duplicate would otherwise have diverged the moment the boundary moved.
+
+---
+
+## Phase 15 — The Tacking Procedure
+
+CLAUDE.md now spells out tacking as a committed procedure rather than a one-off "voluntary in irons" move, and the old implementation did not match it on any point.
+
+- [x] **15.1 Remembered swing direction.** `Unit.tackDirection` records which way a ship is coming about. It cannot be inferred: a ship lying head to wind could have got there from either tack, and the old `getInIronsTurnDirection` guessed from the geometry — sending ships back the way they came. That helper is gone, along with the second copy of it inlined in `combat.ts`. `schemaVersion` 8; a pre-8 save caught mid-tack has the direction derived from its heading.
+- [x] **15.2 Eligibility.** `canTack(unit, prevAttitude)` requires an active ship, not already in irons, beating at both ends of the previous turn. The old code checked only the start of it, and then turned the ship the *wrong way* — `oppDir` of the (already wrong) inferred direction bore away from the wind instead of luffing up into it, so the "voluntary in irons" plan could not have put a ship in irons at all.
+- [x] **15.3 Committed swing, capped at the new tack.** `buildTackPlan` spends every available turn point swinging toward the wind, split across at most two turns, and `tackPointsThisTurn` stops the swing the moment the ship comes onto the new tack so it cannot overshoot into a reach. The old in-irons handling turned `ceil(maxTurnPoints / 2)` *per chunk* — five times a turn — and only exited on landing exactly in the beating band, so a ship that jumped over it swung for ever.
+- [x] **15.4 No way on, drifting throughout.** `MovementPlan.isTack` marks the order, so the ship drifts from the first chunk of the turn it declares the tack — when it is still technically beating — rather than only once the attitude flips. Honoured by resolution, fire simulation, the ghost path and the auto-fit viewport alike. The plan now carries the turns in every case, so there is no separate in-irons swing anywhere.
+- [x] **15.5 No choice mid-tack.** `enumerateMovementPlans` returns exactly one plan for a ship in irons, and filters out any ordinary order that would leave a ship in irons, since turning up into the wind is only legal through the procedure. `resolveTurn` falls back to the continuation when a mid-tack ship has no order, so the rule holds even if the panel never rendered.
+- [x] **15.6 Declare-tack button (7.3).** `PlayerMovementPanel` offers a one-press **Declare tack** when eligible, filling in the whole plan; mid-tack it locks the editor, states the swing and drift, and writes the forced continuation in automatically.
+
+_Known gap: the AI scores a tack like any other plan, and a plan that ends in irons scores poorly, so AI ships will rarely tack of their own accord. Making the AI work to windward deliberately is a scoring change, not a rules one — see 10.5/6.4._
 
 ---
 

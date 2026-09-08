@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { v4 as uuid } from 'uuid'
 import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry, MovementPlan } from '../types'
-import { applyMovementPlan } from '../game/movement'
+import { applyMovementPlan, buildTackPlan } from '../game/movement'
 import { suggestMovement, decideAggressiveAction } from '../game/ai'
 import { computeAIFirePlan } from '../game/combat'
 import { applyGrapple, clearGrappleForRemoved } from '../game/grapple'
@@ -392,7 +392,12 @@ export const useGameStore = create<GameStore>()(
 
         for (let i = 0; i < units.length; i++) {
           const u = units[i]
-          const plan = u.side === 'ai' ? u.hiddenAIOrder : u.playerOrder
+          // A ship mid-tack has no choice in the matter, so the continuation
+          // stands in for a missing order rather than leaving her frozen head
+          // to wind: the rules say she keeps swinging and keeps drifting.
+          const plan =
+            (u.side === 'ai' ? u.hiddenAIOrder : u.playerOrder) ??
+            (u.isInIrons ? buildTackPlan(u, game.windDirection) : null)
           if (!plan) continue
 
           const result = applyMovementPlan(u, plan, game.windDirection)
@@ -405,6 +410,7 @@ export const useGameStore = create<GameStore>()(
             prevAttitude: u.attitude,
             prevMoveDistance: result.distanceTraveled,
             isInIrons: result.isInIrons,
+            tackDirection: result.tackDirection,
             hiddenAIOrder: null,
             playerOrder: null,
             hiddenAIFirePlan: null,

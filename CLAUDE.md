@@ -78,7 +78,19 @@ Exception: for ships flagged as "Fore & Aft Rigged", the first two ranges change
 
 For most ships, the best to worst attitudes are as follows: quarter reaching, running, reaching, beating, in irons.
 
-There is a special rule about going volontarily in irons: if a ship has spent the previous turn entirely beating, it can turn into the wind (so going "in irons") using as many turn points as possible, and keep turning in the same direction the following game rounds, until it's beating again on the other side. All the time it's in irons, it will not move forward, but instead drift in the direction of the wind — that is, straight downwind: 16 points from the direction the wind blows from, never across it. 
+## Tacking
+
+A beating ship that turns further into the wind — even by one point — goes into irons. It may do that, but only by declaring a **tack**, which commits it to a fixed procedure:
+
+- **Eligibility.** A tack may only be declared if the previous turn was spent *entirely* beating: beating as that turn began and still beating as it ended.
+- **Direction.** The ship swings toward whichever bow the wind is on, and **must keep turning that same way** every turn until the tack completes. The direction is remembered rather than re-derived: a ship lying head to wind could have arrived there from either tack, so the geometry alone cannot say which way it should carry on.
+- **No way on.** From the moment the tack is declared — including that first turn, when the ship is technically still beating — it makes no progress under sail. It drifts straight downwind instead, by its drift speed, for as long as the tack lasts.
+- **Completion.** The tack ends the moment the ship is beating again on the *other* side of the wind. It never swings past that point into a reach: the swing each turn is capped at whatever brings it onto the new tack. A tack resolves only at a turn boundary, so a ship that comes round part-way through a turn still drifts out the remainder of it and gathers way again the following turn.
+- **No choice mid-tack.** While the tack is under way, the ship has no other order available.
+
+Because turning up into the wind requires this procedure, an ordinary movement order that would leave a ship in irons is not legal and is never offered.
+
+The player declares a tack with a single button, which fills in the whole movement plan for them.
 
 ## AI unit "style"
 

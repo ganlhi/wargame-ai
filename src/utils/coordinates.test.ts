@@ -27,6 +27,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     attitude: 'reaching',
     isInIrons: false,
     grappledWith: null,
+    tackDirection: null,
     prevAttitude: 'reaching',
     prevMoveDistance: 0,
     hiddenAIOrder: null,

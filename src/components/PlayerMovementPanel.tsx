@@ -1,8 +1,10 @@
-import { useState, useCallback, useMemo } from 'react'
+import { useState, useCallback, useEffect, useMemo } from 'react'
 import type { Unit, MovementPlan, MoveChunk } from '../types'
 import { useGameStore } from '../stores/gameStore'
 import { computeAttitude, ATTITUDE_LABELS } from '../utils/attitude'
-import { splitMovement, computeEffectiveMaxSpeed, minMoveDistance } from '../game/movement'
+import {
+  splitMovement, computeEffectiveMaxSpeed, minMoveDistance, buildTackPlan, canTack,
+} from '../game/movement'
 import { Select } from './Select'
 
 const TURN_DIRECTION_OPTIONS = [
@@ -19,8 +21,25 @@ export function PlayerMovementPanel({ unit }: Props) {
   const setPlayerOrder = useGameStore((s) => s.setPlayerOrder)
   const windDirection = useGameStore((s) => s.currentGame?.windDirection ?? 0)
   const currentPhase = useGameStore((s) => s.currentGame?.currentPhase)
-  const isEditable = currentPhase === 'orders'
   const attitude = computeAttitude(windDirection, unit.orientation, unit.foreAndAftRigged)
+
+  // Mid-tack the ship has no decision to make: it keeps swinging the same way
+  // under no sail until it is beating on the new tack, so the order is forced.
+  const tacking = unit.isInIrons
+  const isEditable = currentPhase === 'orders' && !tacking
+  const mayTack = currentPhase === 'orders' && canTack(unit, unit.prevAttitude)
+  const tackPlan = useMemo(
+    () => (tacking || mayTack ? buildTackPlan(unit, windDirection) : null),
+    [tacking, mayTack, unit, windDirection],
+  )
+
+  // A forced tack still has to reach the resolve step, so write it in as soon
+  // as the orders phase opens rather than waiting for the player to confirm
+  // something they cannot change.
+  useEffect(() => {
+    if (currentPhase !== 'orders' || !tacking || unit.playerOrder?.isTack || !tackPlan) return
+    setPlayerOrder(unit.id, tackPlan)
+  }, [currentPhase, tacking, unit.playerOrder, unit.id, tackPlan, setPlayerOrder])
 
   const [expanded, setExpanded] = useState(false)
 
@@ -97,7 +116,9 @@ export function PlayerMovementPanel({ unit }: Props) {
     setPlayerOrder(unit.id, null)
   }, [setPlayerOrder, unit.id])
 
-  const planString = existingOrder
+  const planString = existingOrder?.isTack
+    ? `Tack: ${existingOrder.totalTurnPoints} pt${existingOrder.totalTurnPoints === 1 ? '' : 's'}, drifting`
+    : existingOrder
     ? existingOrder.chunks
         .map(
           (c) =>
@@ -125,7 +146,41 @@ export function PlayerMovementPanel({ unit }: Props) {
           </button>
         )}
       </div>
-      <p className="text-xs text-gray-500 mt-1">{ATTITUDE_LABELS[attitude]}{unit.isInIrons ? ' (in irons)' : ''}</p>
+      <p className="text-xs text-gray-500 mt-1">
+        {ATTITUDE_LABELS[attitude]}
+        {tacking && unit.tackDirection
+          ? ` · tacking to ${unit.tackDirection}`
+          : unit.isInIrons
+            ? ' (in irons)'
+            : ''}
+      </p>
+
+      {tacking && tackPlan && (
+        <p className="text-xs text-amber-400 mt-0.5">
+          Coming about: {tackPlan.totalTurnPoints} pt{tackPlan.totalTurnPoints === 1 ? '' : 's'} to{' '}
+          {unit.tackDirection}, drifting {unit.driftSpeed}mm downwind. No sail until she's beating
+          on the new tack.
+        </p>
+      )}
+
+      {mayTack && tackPlan && (
+        <div className="mt-1.5">
+          <button
+            onClick={() => setPlayerOrder(unit.id, tackPlan)}
+            className={`w-full text-xs px-2 py-1.5 rounded border transition-colors cursor-pointer ${
+              unit.playerOrder?.isTack
+                ? 'bg-amber-600/30 border-amber-700 text-amber-200'
+                : 'border-amber-800 text-amber-400 hover:text-amber-300'
+            }`}
+          >
+            {unit.playerOrder?.isTack ? '⟳ Tacking declared' : '⟳ Declare tack'}
+          </button>
+          <p className="text-xs text-gray-600 mt-0.5">
+            Turns {tackPlan.totalTurnPoints} pt{tackPlan.totalTurnPoints === 1 ? '' : 's'} into the
+            wind, no way on, drifting downwind until she's beating on the other side.
+          </p>
+        </div>
+      )}
       {planString ? (
         <p className="text-xs text-gray-400 mt-0.5 break-all">{planString}</p>
       ) : (

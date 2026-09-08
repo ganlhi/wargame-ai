@@ -1,5 +1,5 @@
 import type { Attitude, Unit, MovementPlan, MoveChunk, SpeedRange } from '../types'
-import { computeAttitude, inIronsLimit, windTowardPoint } from '../utils/attitude'
+import { computeAttitude, windTowardPoint } from '../utils/attitude'
 
 export const MOVEMENT_STEP = 5
 
@@ -55,27 +55,69 @@ export function driftVector(windDirection: number): { dx: number; dy: number } {
 }
 
 /**
- * Which way a ship swings while it is in irons. The band boundary depends on
- * the rig, so this has to agree with `computeAttitude` — a square rig is still
- * in irons at 5 points off the wind where a fore-and-aft rig is already beating.
- *
- * `rel` is the bearing of the wind's source from the bow, 0–31 clockwise, so
- * `rel <= 16` means the wind is off the starboard bow.
+ * Which bow the wind is on. null when it is dead ahead or dead astern, where
+ * there is no side to speak of.
  */
-export function getInIronsTurnDirection(
+export function windSide(orientation: number, windDirection: number): 'port' | 'starboard' | null {
+  const rel = ((windDirection - orientation) % 32 + 32) % 32
+  if (rel === 0 || rel === 16) return null
+  return rel < 16 ? 'starboard' : 'port'
+}
+
+/** The way a ship must swing to tack: toward whichever bow the wind is on. */
+export function tackTurnDirection(orientation: number, windDirection: number): 'port' | 'starboard' {
+  return windSide(orientation, windDirection) === 'port' ? 'port' : 'starboard'
+}
+
+/** The bow the wind ends up on once a tack in `direction` is complete. */
+function tackTargetSide(direction: 'port' | 'starboard'): 'port' | 'starboard' {
+  return direction === 'port' ? 'starboard' : 'port'
+}
+
+/**
+ * Whether a ship may declare a tack. The procedure is only open to a ship that
+ * spent the whole of the previous turn beating — beating as the turn started
+ * and still beating as it ended.
+ */
+export function canTack(unit: Unit, prevAttitude: Attitude | null): boolean {
+  return (
+    unit.status === 'active' &&
+    !unit.isInIrons &&
+    unit.attitude === 'beating' &&
+    prevAttitude === 'beating'
+  )
+}
+
+/** Whether a tack that swung `direction` has finished: beating on the new tack. */
+export function isTackComplete(
   orientation: number,
   windDirection: number,
+  direction: 'port' | 'starboard',
   foreAndAftRigged: boolean,
-): 'port' | 'starboard' {
-  const rel = ((windDirection - orientation) % 32 + 32) % 32
-  const norm = rel > 16 ? 32 - rel : rel
-  const limit = inIronsLimit(foreAndAftRigged)
+): boolean {
+  return (
+    computeAttitude(windDirection, orientation, foreAndAftRigged) === 'beating' &&
+    windSide(orientation, windDirection) === tackTargetSide(direction)
+  )
+}
 
-  if (norm > limit && norm <= 7) {
-    return rel <= 16 ? 'starboard' : 'port'
+/**
+ * How far the ship swings this turn: everything it has, but stopping the moment
+ * it comes onto the new tack, since the procedure ends there and overshooting
+ * would carry it past beating into a reach.
+ */
+export function tackPointsThisTurn(
+  unit: Unit,
+  windDirection: number,
+  direction: 'port' | 'starboard',
+): number {
+  const step = direction === 'port' ? -1 : 1
+  let orientation = unit.orientation
+  for (let points = 1; points <= unit.maxTurnPoints; points++) {
+    orientation = (orientation + step + 32) % 32
+    if (isTackComplete(orientation, windDirection, direction, unit.foreAndAftRigged)) return points
   }
-
-  return rel <= limit ? 'port' : 'starboard'
+  return unit.maxTurnPoints
 }
 
 function buildPlan(
@@ -100,6 +142,22 @@ function buildPlan(
  * constrains where a ship can end up — positions are free to go negative or run
  * arbitrarily far from the origin.
  */
+/**
+ * The order for a tack: no way on at all, and every turn point available spent
+ * swinging through the wind — split into at most two turns, as the movement
+ * rules require. A ship already mid-tack keeps the direction it started with.
+ */
+export function buildTackPlan(unit: Unit, windDirection: number): MovementPlan {
+  const direction = unit.tackDirection ?? tackTurnDirection(unit.orientation, windDirection)
+  const points = tackPointsThisTurn(unit, windDirection, direction)
+  const first = Math.ceil(points / 2)
+  const second = points - first
+  const turns: { afterChunk: number; direction: 'port' | 'starboard'; points: number }[] = []
+  if (first > 0) turns.push({ afterChunk: 1, direction, points: first })
+  if (second > 0) turns.push({ afterChunk: 3, direction, points: second })
+  return { ...buildPlan([0, 0, 0, 0, 0], turns, points, 0), isTack: true }
+}
+
 export function applyMovementPlan(
   unit: Unit,
   plan: MovementPlan,
@@ -109,13 +167,19 @@ export function applyMovementPlan(
   orientation: number
   attitude: Attitude
   isInIrons: boolean
+  tackDirection: 'port' | 'starboard' | null
   distanceTraveled: number
   path: { x: number; y: number }[]
   poses: { x: number; y: number; orientation: number }[]
 } {
   let { x, y } = unit.position
   let orientation = unit.orientation
-  let isInIrons = unit.isInIrons
+  // A tack is under way from the moment it is declared, so the ship already
+  // carries no way on during the turn it first swings up into the wind — even
+  // though it begins that turn still beating.
+  let isInIrons = unit.isInIrons || !!plan.isTack
+  let tackDirection =
+    unit.tackDirection ?? (plan.isTack ? tackTurnDirection(unit.orientation, windAngle) : null)
   let distanceTraveled = 0
   const path = [{ x, y }]
   const poses = [{ x, y, orientation }]
@@ -142,18 +206,9 @@ export function applyMovementPlan(
     // sat during the move.
     poses.push({ x, y, orientation })
 
-    if (isInIrons) {
-      const dir = getInIronsTurnDirection(orientation, windAngle, unit.foreAndAftRigged)
-      const pts = Math.ceil(unit.maxTurnPoints / 2)
-      orientation = dir === 'port'
-        ? (orientation - pts + 32) % 32
-        : (orientation + pts) % 32
-
-      const newAtt = computeAttitude(windAngle, orientation, unit.foreAndAftRigged)
-      if (newAtt === 'beating') {
-        isInIrons = false
-      }
-    } else if (chunk.turn) {
+    // The plan carries the turns in every case, tack included — a ship in irons
+    // no longer swings by some separately-derived amount of its own.
+    if (chunk.turn) {
       const dir = chunk.turn.direction === 'port' ? -1 : 1
       orientation = (orientation + dir * chunk.turn.points + 32) % 32
     }
@@ -161,8 +216,21 @@ export function applyMovementPlan(
 
   const attitude = computeAttitude(windAngle, orientation, unit.foreAndAftRigged)
 
-  if (!isInIrons && attitude === 'in_irons' && !unit.isInIrons) {
+  if (tackDirection) {
+    // The tack runs until the ship is beating on the far side of the wind. It
+    // resolves only at the end of a turn: a ship that comes round part-way
+    // through still spends the rest of that turn drifting, and gathers way
+    // again next turn.
+    if (isTackComplete(orientation, windAngle, tackDirection, unit.foreAndAftRigged)) {
+      isInIrons = false
+      tackDirection = null
+    }
+  } else if (attitude === 'in_irons') {
+    // A ship that ends up in irons without declaring a tack — dragged round, or
+    // an order built before the rule applied — is put into the procedure, so it
+    // always has a defined way out rather than sitting head to wind for ever.
     isInIrons = true
+    tackDirection = tackTurnDirection(orientation, windAngle)
   }
 
   return {
@@ -170,6 +238,7 @@ export function applyMovementPlan(
     orientation: Math.round(orientation) % 32,
     attitude,
     isInIrons,
+    tackDirection,
     distanceTraveled: Math.round(distanceTraveled),
     path: path.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
     poses,
@@ -184,15 +253,10 @@ export function enumerateMovementPlans(
   const plans: MovementPlan[] = []
   const { maxTurnPoints, speedProfile } = unit
 
+  // Mid-tack there is nothing to decide: the ship must keep swinging the same
+  // way, under no sail, until it comes onto the new tack.
   if (unit.isInIrons) {
-    const dir = getInIronsTurnDirection(unit.orientation, windAngle, unit.foreAndAftRigged)
-    const turn1 = Math.ceil(maxTurnPoints / 2)
-    const turn2 = maxTurnPoints - turn1
-    const turns: { afterChunk: number; direction: 'port' | 'starboard'; points: number }[] = []
-    if (turn1 > 0) turns.push({ afterChunk: 1, direction: dir, points: turn1 })
-    if (turn2 > 0) turns.push({ afterChunk: 3, direction: dir, points: turn2 })
-    plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, speedProfile[computeAttitude(windAngle, unit.orientation, unit.foreAndAftRigged)].max))
-    return plans
+    return [buildTackPlan(unit, windAngle)]
   }
 
   const range = getSpeedRangeForAttitude(computeAttitude(windAngle, unit.orientation, unit.foreAndAftRigged), speedProfile)
@@ -248,27 +312,6 @@ export function enumerateMovementPlans(
     }
   }
 
-  if (!unit.isInIrons) {
-    const dir = getInIronsTurnDirection(unit.orientation, windAngle, unit.foreAndAftRigged)
-    const turn1 = Math.ceil(maxTurnPoints / 2)
-    const turn2 = maxTurnPoints - turn1
-    const turns: { afterChunk: number; direction: 'port' | 'starboard'; points: number }[] = []
-    if (turn1 > 0) turns.push({ afterChunk: 1, direction: dir, points: turn1 })
-    if (turn2 > 0) turns.push({ afterChunk: 3, direction: dir, points: turn2 })
-    plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, range.max))
-  }
-
-  if (prevAttitude === 'beating' && !unit.isInIrons) {
-    const dir = getInIronsTurnDirection(unit.orientation, windAngle, unit.foreAndAftRigged)
-    const oppDir = dir === 'port' ? 'starboard' : 'port'
-    const turn1 = Math.ceil(maxTurnPoints / 2)
-    const turn2 = maxTurnPoints - turn1
-    const turns: { afterChunk: number; direction: 'port' | 'starboard'; points: number }[] = []
-    if (turn1 > 0) turns.push({ afterChunk: 1, direction: oppDir, points: turn1 })
-    if (turn2 > 0) turns.push({ afterChunk: 3, direction: oppDir, points: turn2 })
-    plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, range.max))
-  }
-
   if (effectiveMinDist <= 0) {
     for (let tp = 1; tp <= maxTurnPoints; tp++) {
       for (const dir of (['port', 'starboard'] as const)) {
@@ -279,5 +322,17 @@ export function enumerateMovementPlans(
     plans.push(buildPlan([0, 0, 0, 0, 0], [], 0, range.max))
   }
 
-  return plans
+  // Turning up into the wind is only legal through the tacking procedure, so
+  // discard any ordinary order that would leave the ship in irons.
+  const legal = plans.filter(
+    (plan) =>
+      computeAttitude(windAngle, applyMovementPlan(unit, plan, windAngle).orientation, unit.foreAndAftRigged) !==
+      'in_irons',
+  )
+
+  if (canTack(unit, prevAttitude)) {
+    legal.push(buildTackPlan(unit, windAngle))
+  }
+
+  return legal
 }
