@@ -2,7 +2,7 @@
 
 > **Status as of 2026-09-08.** This plan has been reconciled with the code actually on `main`.
 >
-> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, **Phase 13** replaced native dropdowns with an anchored control that works on mobile, **Phase 14** corrected the attitude bands and added rig types, **Phase 15** implemented the tacking procedure, and **Phase 16** made reloading per arc. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
+> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, **Phase 13** replaced native dropdowns with an anchored control that works on mobile, **Phase 14** corrected the attitude bands and added rig types, **Phase 15** implemented the tacking procedure, **Phase 16** made reloading per arc, and **Phase 17** stopped the AI manoeuvring out of its own firing solution. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
 > Legend: `[x]` done · `[~]` partially done / deviates from original plan · `[ ]` not started.
 > Items marked `[~]` or `[ ]` are consolidated as actionable work in **Phase 10 — Remaining Work**.
 
@@ -216,6 +216,13 @@ CLAUDE.md now spells out tacking as a committed procedure rather than a one-off 
 - [x] **16.2 Reloading is per arc (8.2).** `Unit.lastFireChunk: number | null` becomes `lastFireChunks: Partial<Record<ArcSide, number>>`, and the reload check moved from a ship-wide guard at the top of the chunk loop into `bestArcSide`, where it applies to the arc being considered. A starboard broadside fired on chunk 2 no longer silences the port guns. `schemaVersion` 9; the old field did not record which arc had fired, so it cannot be carried over and every arc starts loaded.
 - [x] **16.3 Reveal panel names the arcs.** "Reloading (fired at chunk N last turn)" becomes a per-arc list — "Reloading: Starboard until chunk 3".
 - [x] **16.4 Tests for `combat.ts`.** The module had none, which is how 16.1 survived. `combat.test.ts` covers bearing, range, arc choice by weight, own-side and out-of-the-fight targets, and the reload rules; `gameStore.test.ts` covers the clearing behaviour across turns.
+
+---
+
+## Phase 17 — Manoeuvring for the Guns
+
+- [x] **17.1 The AI sailed out of its own firing solution (bug).** Movement was chosen first and the fire plan fitted to it afterwards, and the only firing input to the choice was `scoreFiring`, which reads the arc bearing at the *end* of the turn. The shot is actually taken at whichever chunk of the move first offers one, so a plan could score well and fire nothing. `scoreFiringOpportunity` now runs the same resolution the reveal step will run, for each candidate plan, and pays per gun that will actually fire. Measured over a fixed geometry across all 32 wind directions and all three styles: of 96 cases where a shot was already on the table, the AI threw it away 39 times before and 5 after — and all five remaining are aggressive ships closing to board, which is the style working as intended.
+- [x] **17.2 Ships were paid to spin (bug).** `score += moveDist * 0.5 + orientCost * 2` added a reward for rotating, under a variable named `orientCost`. Turning already costs speed through the 5%-per-point rule, so the term was double-counting with the wrong sign; it is gone. This is what tipped an immobile ship into swinging a bearing broadside off target for the sake of the turn itself.
 
 ---
 

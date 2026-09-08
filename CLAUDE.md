@@ -94,7 +94,7 @@ The player declares a tack with a single button, which fills in the whole moveme
 
 ## Firing and reloading
 
-A ship fires one arc per turn, at the earliest chunk of its movement where the arc bears on a target in range.
+A ship fires one arc per turn, at the earliest chunk of its movement where the arc bears on a target in range. Because the shot is taken *during* the move rather than at the end of it, an AI weighs each candidate move by the shot it would actually produce — otherwise it can manoeuvre itself out of its own firing solution, turning a bearing broadside away from a target at point-blank range.
 
 Reloading is tracked **per arc**, not per ship. An arc that fired on chunk N is loaded again on chunk N of the following turn — a full turn's work. The other arcs are unaffected: a starboard broadside fired on chunk 2 leaves the port guns free to fire from chunk 1. Any arc that does not fire during a turn is loaded by the next one.
 

@@ -4,6 +4,7 @@ import {
   enumerateMovementPlans, applyMovementPlan, orientationToVector, driftVector,
   projectTackCompletion,
 } from './movement'
+import { computeAIFirePlan } from './combat'
 import type { Point } from '../utils/geometry'
 import {
   distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle,
@@ -42,6 +43,13 @@ const LEASH_MULT = 1.5
 const LEASH_PENALTY_MULT = 0.5
 // Used when neither ship has any armament to derive a range from.
 const LEASH_FALLBACK_RANGE = 400
+
+// What a plan is worth for actually getting the guns off. `scoreFiring` only
+// looks at where the turn ends, but the shot is taken at whichever chunk of the
+// move first offers one — so a plan can score well on its final pose and still
+// fire nothing, which is how ships ended up turning a bearing broadside away
+// from a target at point-blank range.
+const FIRE_SOLUTION_PER_GUN = 4
 
 // What coming about is worth, per broadside gun that would bear once the tack
 // is complete. A tack costs several turns in irons, so it has to be paid for by
@@ -377,6 +385,30 @@ export function scoreTack(
   return best * (TACK_STYLE_MULT[unit.aiStyle] ?? 1) * LOOKAHEAD_DISCOUNT ** (outcome.turns - 1)
 }
 
+/**
+ * Whether this plan actually gets a shot off, and with what weight of metal.
+ *
+ * The fire plan is worked out from the movement order once it has been chosen,
+ * so unless the choice accounts for it the ship can manoeuvre itself out of its
+ * own firing solution. Running the same resolution the reveal step will run is
+ * the only way to score a plan on what it really achieves.
+ */
+function scoreFiringOpportunity(
+  unit: Unit,
+  plan: MovementPlan,
+  allUnits: Unit[],
+  windDirection: number,
+): number {
+  // computeAIFirePlan resolves an AI ship's guns against the player's.
+  if (unit.side !== 'ai') return 0
+
+  const firePlan = computeAIFirePlan({ ...unit, hiddenAIOrder: plan }, allUnits, windDirection)
+  if (!firePlan) return 0
+
+  const arc = unit.firingArcs.find((a) => a.side === firePlan.arcSide)
+  return (arc?.weapons || 1) * FIRE_SOLUTION_PER_GUN
+}
+
 export function evaluatePosition(
   unit: Unit,
   enemies: Unit[],
@@ -551,9 +583,11 @@ export function suggestMovement(
       }
     }
 
-    const orientChange = Math.abs(((newState.orientation - unit.orientation) % 32 + 32) % 32)
-    const orientCost = Math.min(orientChange, 32 - orientChange)
-    score += moveDist * 0.5 + orientCost * 2
+    score += moveDist * 0.5
+
+    // Score the plan on the shot it actually produces, not just on the arc that
+    // happens to bear once the turn is over.
+    score += scoreFiringOpportunity(unit, plan, allUnits, windDirection)
 
     const projectedPos = projectNextPosition(
       newState.position,

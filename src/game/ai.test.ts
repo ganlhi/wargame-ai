@@ -3,6 +3,10 @@ import {
   evaluatePosition, suggestMovement, decideAggressiveAction, basesWithinGrapple, scoreTack,
 } from './ai'
 import { applyMovementPlan } from './movement'
+import { computeAIFirePlan } from './combat'
+import { centerFromSternMidpoint } from '../utils/coordinates'
+import { computeAttitude } from '../utils/attitude'
+import { distance } from '../utils/geometry'
 import { baseCorners, polygonsIntersect } from '../utils/geometry'
 import type { Unit, Attitude, SpeedRange, FiringArc, MovementPlan, TableTerrain } from '../types'
 
@@ -427,5 +431,76 @@ describe('tacking as an AI choice', () => {
     const enemy = enemyOnBearing(18, 90)
     const plan = suggestMovement(unit, [unit, enemy], [], 0, 'in_irons')
     expect(plan?.isTack).toBe(true)
+  })
+})
+
+describe('choosing a move that actually fires', () => {
+  const BROADSIDES: FiringArc[] = [
+    { id: 'p', side: 'port', maxRange: 300, weapons: 10 },
+    { id: 's', side: 'starboard', maxRange: 300, weapons: 10 },
+  ]
+  const STATIONARY: MovementPlan = {
+    chunks: [{ distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }],
+    totalTurnPoints: 0,
+    effectiveMaxSpeed: 0,
+  }
+
+  // The reported case: a player ship at the origin heading SSE, with the AI
+  // 131mm east and 47mm south of it heading NNW. Positions are entered as the
+  // middle of the stern, so the base centres are derived from them.
+  const reportedSituation = (aiStyle: Unit['aiStyle'] = 'cautious') => {
+    const player = makeUnit({
+      id: 'p1', side: 'player', orientation: 14,
+      position: centerFromSternMidpoint({ x: 0, y: 0 }, 14, 80),
+      firingArcs: BROADSIDES,
+    })
+    const ai = makeUnit({
+      id: 'ai1', side: 'ai', aiStyle, orientation: 30,
+      position: centerFromSternMidpoint({ x: 131, y: 47 }, 30, 80),
+      firingArcs: BROADSIDES,
+    })
+    return { ai, player }
+  }
+
+  it('has a broadside bearing at point-blank range to begin with', () => {
+    const { ai, player } = reportedSituation()
+    expect(computeAIFirePlan({ ...ai, hiddenAIOrder: STATIONARY }, [ai, player], 0)).toMatchObject({
+      arcSide: 'port',
+      targetId: 'p1',
+    })
+  })
+
+  it('does not turn that broadside away — the move it picks still fires', () => {
+    // Wind from the north leaves this ship in irons and unable to sail, so the
+    // only thing on offer is a turn. It used to spend that turn swinging the
+    // target out of the port arc and into a blind spot, and fire nothing.
+    for (const style of ['aggressive', 'cautious', 'defensive'] as const) {
+      const { ai, player } = reportedSituation(style)
+      const unit = { ...ai, attitude: computeAttitude(0, ai.orientation, false) }
+      const plan = suggestMovement(unit, [unit, player], [], 0, unit.attitude)
+      expect(plan).not.toBeNull()
+      const fire = computeAIFirePlan({ ...unit, hiddenAIOrder: plan }, [unit, player], 0)
+      expect(fire, `${style} threw away its shot`).not.toBeNull()
+    }
+  })
+
+  it('prefers the plan that gets the guns off, all else being close', () => {
+    // Wind on the beam, so the ship can sail and has real choices to weigh.
+    const { ai, player } = reportedSituation('cautious')
+    const unit = { ...ai, attitude: computeAttitude(8, ai.orientation, false) }
+    const plan = suggestMovement(unit, [unit, player], [], 8, unit.attitude)
+    expect(computeAIFirePlan({ ...unit, hiddenAIOrder: plan }, [unit, player], 8)).not.toBeNull()
+  })
+
+  it('still lets an aggressive ship close to board rather than stand off and shoot', () => {
+    // Losing a broadside to get alongside is the aggressive style working as
+    // intended, so the firing term must not override it.
+    const { ai, player } = reportedSituation('aggressive')
+    const unit = { ...ai, attitude: computeAttitude(12, ai.orientation, false) }
+    const plan = suggestMovement(unit, [unit, player], [], 12, unit.attitude)
+    const end = applyMovementPlan(unit, plan!, 12)
+    expect(distance(end.position, player.position)).toBeLessThan(
+      distance(unit.position, player.position),
+    )
   })
 })
