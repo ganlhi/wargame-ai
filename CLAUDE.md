@@ -124,4 +124,6 @@ Dropdowns use a custom control rather than a native `<select>`: a native one han
 
 All table information is entered by hand — there is no photo capture. With no table edges to align to and terrain reduced to primitives, a photograph has nothing left to anchor, so the setup flow is wind direction followed by typed terrain and unit descriptions.
 
+A ship's planned move is drawn on the map as a track from where she is to where she will be. A **solid** track means she is under way; a **dashed** one means she is making no way of her own and going where the wind takes her — in irons, or on a declared tack.
+
 The battlefield view has no fixed extent to draw: it frames whatever is currently in play (ships, their bases, terrain and previewed movement paths), rescaling as the action spreads out or closes up. The player can take over that view at any time — drag empty water to pan, scroll or pinch to zoom, or use the on-screen controls — and a **Fit** button hands it back to following the action automatically. 

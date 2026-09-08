@@ -9,6 +9,7 @@ import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS, windTowardPoint } fro
 import { orientationToVector, driftVector } from '../game/movement'
 import type { Point } from '../utils/geometry'
 import { terrainPolygon } from '../utils/geometry'
+import { dashSegments } from '../utils/dashedPath'
 import {
   formatOffset, originPoint, terrainReferencePoint, toOffset, unitReferencePoint,
 } from '../utils/coordinates'
@@ -33,6 +34,10 @@ const MAX_GRID_LINES = 40
 
 /** How far a pointer must travel before a tap becomes a pan, in pixels. */
 const PAN_THRESHOLD = 4
+
+/** Dash pattern for a drift track, in screen pixels. */
+const DRIFT_DASH = 6
+const DRIFT_DASH_GAP = 5
 
 function getStatusColor(status: UnitStatus): number | null {
   switch (status) {
@@ -541,12 +546,11 @@ export function GameCanvas({
       let px = u.position.x
       let py = u.position.y
 
-      const pathG = new Graphics()
-      pathG.moveTo(startPos.x, startPos.y)
-
       // A declared tack drifts from its first chunk, even though the ship is
       // still beating as the turn opens.
       const drifting = u.isInIrons || !!plan.isTack
+      const track: Point[] = [startPos]
+
       for (const chunk of plan.chunks) {
         if (drifting) {
           const drift = driftVector(currentGame.windDirection)
@@ -559,14 +563,26 @@ export function GameCanvas({
           px += Math.cos(vecAngle) * chunk.distance
           py += Math.sin(vecAngle) * chunk.distance
         }
-        const sp = worldToScreen(px, py, w, h)
-        pathG.lineTo(sp.x, sp.y)
+        track.push(worldToScreen(px, py, w, h))
 
         if (chunk.turn) {
           ox = (ox + (chunk.turn.direction === 'starboard' ? chunk.turn.points : -chunk.turn.points) + 32) % 32
         }
       }
 
+      // A ship under way is drawn with a solid track; one making no way of its
+      // own and going where the wind takes it is dashed, so the two read apart
+      // at a glance.
+      const pathG = new Graphics()
+      if (drifting) {
+        for (const [from, to] of dashSegments(track, DRIFT_DASH, DRIFT_DASH_GAP)) {
+          pathG.moveTo(from.x, from.y)
+          pathG.lineTo(to.x, to.y)
+        }
+      } else {
+        pathG.moveTo(track[0].x, track[0].y)
+        for (const point of track.slice(1)) pathG.lineTo(point.x, point.y)
+      }
       pathG.stroke({ color, width: 2, alpha: 0.6 })
       oc.addChild(pathG)
 
