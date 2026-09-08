@@ -2,7 +2,7 @@ import { useState, useCallback, useMemo } from 'react'
 import type { Unit, MovementPlan, MoveChunk } from '../types'
 import { useGameStore } from '../stores/gameStore'
 import { computeAttitude, ATTITUDE_LABELS } from '../utils/attitude'
-import { splitMovement } from '../game/movement'
+import { splitMovement, computeEffectiveMaxSpeed, minMoveDistance } from '../game/movement'
 
 interface Props {
   unit: Unit
@@ -38,6 +38,20 @@ export function PlayerMovementPanel({ unit }: Props) {
 
   const chunkDists = useMemo(() => splitMovement(totalDist), [totalDist])
 
+  // Turn points cost 5% of top speed each, so the ceiling depends on the plan
+  // being built — it drops live as turns are added. The floor is half of last
+  // turn's distance (half the maximum if the ship has yet to move) and is fixed
+  // for the turn, so a heavily-turning plan can push the ceiling below it: that
+  // combination is simply not a legal order.
+  const totalTurnPoints = useMemo(
+    () => turns.reduce((sum, t) => sum + (t.direction ? t.points : 0), 0),
+    [turns],
+  )
+  const baseMax = unit.speedProfile[attitude].max
+  const maxDist = Math.floor(computeEffectiveMaxSpeed(baseMax, totalTurnPoints))
+  const minDist = Math.ceil(minMoveDistance(unit.prevMoveDistance, baseMax))
+  const outOfRange = totalDist < minDist || totalDist > maxDist
+
   const updateTurn = useCallback(
     (index: number, field: string, value: number | string) => {
       setTurns((prev) => {
@@ -60,17 +74,15 @@ export function PlayerMovementPanel({ unit }: Props) {
         }) as MoveChunk,
     ) as [MoveChunk, MoveChunk, MoveChunk, MoveChunk, MoveChunk]
 
-    const totalTurnPts = turns.reduce((s, t) => s + (t.direction ? t.points : 0), 0)
-
     const plan: MovementPlan = {
       chunks: planChunks,
-      totalTurnPoints: totalTurnPts,
+      totalTurnPoints,
       effectiveMaxSpeed: totalDist,
     }
 
     setPlayerOrder(unit.id, plan)
     setExpanded(false)
-  }, [chunkDists, turns, totalDist, setPlayerOrder, unit.id])
+  }, [chunkDists, turns, totalTurnPoints, totalDist, setPlayerOrder, unit.id])
 
   const handleClear = useCallback(() => {
     setTotalDist(0)
@@ -114,16 +126,56 @@ export function PlayerMovementPanel({ unit }: Props) {
       )}
       {expanded && isEditable && (
         <div className="mt-2 space-y-1 border-t border-gray-700 pt-2">
-          <div className="flex items-center gap-1 text-xs mb-2">
-            <span className="text-gray-500">Total:</span>
-            <input
-              type="number"
-              min={0}
-              value={totalDist}
-              onChange={(e) => setTotalDist(Math.max(0, Number(e.target.value)))}
-              className="w-16 bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-gray-200 text-xs focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-            <span className="text-gray-500">mm</span>
+          <div className="mb-2">
+            <div className="flex items-center gap-1 text-xs">
+              <span className="text-gray-500">Total:</span>
+              <input
+                type="number"
+                min={0}
+                value={totalDist}
+                onChange={(e) => setTotalDist(Math.max(0, Number(e.target.value)))}
+                className={`w-16 bg-gray-800 border rounded px-1.5 py-1 text-xs focus:outline-none focus:ring-1 ${
+                  outOfRange
+                    ? 'border-red-700 text-red-300 focus:ring-red-500'
+                    : 'border-gray-700 text-gray-200 focus:ring-blue-500'
+                }`}
+              />
+              <span className="text-gray-500">mm</span>
+              <button
+                type="button"
+                onClick={() => setTotalDist(minDist)}
+                className="ml-auto text-gray-500 hover:text-gray-300 border border-gray-700 rounded px-1 py-0.5 cursor-pointer"
+                title="Set to the minimum"
+              >
+                min
+              </button>
+              <button
+                type="button"
+                onClick={() => setTotalDist(maxDist)}
+                className="text-gray-500 hover:text-gray-300 border border-gray-700 rounded px-1 py-0.5 cursor-pointer"
+                title="Set to the maximum"
+              >
+                max
+              </button>
+            </div>
+            <p className={`text-xs mt-1 ${outOfRange ? 'text-red-400' : 'text-gray-500'}`}>
+              Min <span className="text-gray-300">{minDist}mm</span>
+              {' · '}
+              Max <span className="text-gray-300">{maxDist}mm</span>
+              {totalTurnPoints > 0 && (
+                <span className="text-gray-600"> ({baseMax}mm &minus;{totalTurnPoints * 5}% for {totalTurnPoints} turn pt{totalTurnPoints === 1 ? '' : 's'})</span>
+              )}
+            </p>
+            <p className="text-xs text-gray-600">
+              {unit.prevMoveDistance === null
+                ? 'Min is half the maximum — this ship has not moved yet.'
+                : `Min is half of last turn's ${Math.round(unit.prevMoveDistance)}mm.`}
+            </p>
+            {minDist > maxDist && (
+              <p className="text-xs text-red-400 mt-0.5">
+                Too many turn points: the ceiling has dropped below the minimum move.
+              </p>
+            )}
           </div>
           {turns.map((turn, i) => (
             <div key={i} className="flex items-center gap-0.5 text-xs">

@@ -2,7 +2,7 @@
 
 > **Status as of 2026-09-08.** This plan has been reconciled with the code actually on `main`.
 >
-> **Phase 11 reshaped the model: the table is now infinite.** Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
+> **Phase 11 reshaped the model: the table is now infinite**, and **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
 > Legend: `[x]` done · `[~]` partially done / deviates from original plan · `[ ]` not started.
 > Items marked `[~]` or `[ ]` are consolidated as actionable work in **Phase 10 — Remaining Work**.
 
@@ -73,7 +73,7 @@
 ## Phase 5 — Core Movement Logic (`src/game/movement.ts`, `src/utils/attitude.ts`)
 
 - [x] **5.1** `computeAttitude(windDirection, orientation)` — modulo wrap-around, points-from-bow mapping
-- [x] **5.2** `getSpeedRangeForAttitude(...)` — _`SpeedRange` is `{ max }` per attitude; the minimum move each turn is `prevMoveDistance / 2`, which is the actual game rule (not a simplification — see 10.4)._
+- [x] **5.2** `getSpeedRangeForAttitude(...)` / `minMoveDistance(...)` — _`SpeedRange` is `{ max }` per attitude; the minimum move each turn is `prevMoveDistance / 2`, which is the actual game rule (not a simplification — see 10.4). `prevMoveDistance` is `null` until a ship has had a movement phase, in which case the minimum is half the **maximum** instead (Phase 12)._
 - [x] **5.3** `computeEffectiveMaxSpeed(baseMaxSpeed, turnPoints)` — 5% penalty per turn point
 - [x] **5.4** `splitMovement(distance)` — 5 whole chunks, larger first
 - [x] **5.5** `applyMovementPlan(...)` — walks 5 chunks and returns position/orientation/attitude/isInIrons/**distanceTraveled**/path/poses. _Phase 11 removed the table arguments, the per-chunk edge clamping and `hitBoundary`: positions are unbounded and may go negative._
@@ -110,7 +110,7 @@
 
 ## Phase 9 — Polish & Mobile Optimisation
 
-- [~] **9.1** Touch interactions — _tap-to-select and drag-to-move work; **pinch-to-zoom and long-press context menu are not implemented**; verify 44×44px tap targets._
+- [~] **9.1** Touch interactions — _tap-to-select, drag-to-move, drag-to-pan and pinch-to-zoom all work (Phase 12); **long-press context menu is not implemented**; verify 44×44px tap targets._
 - [~] **9.2** Responsive layout — _layout is responsive; portrait-stack / landscape-column / bottom-sheet behaviours not explicitly verified._
 - [ ] **9.3** Accessibility — high-contrast mode, screen-reader labels
 - [ ] **9.4** Performance — sprite batching, lazy terrain rendering, **debounced save**, and code-splitting the ~560 kB bundle
@@ -139,7 +139,7 @@ Ordered roughly by value-to-effort. Each item references the phase it completes.
 - [ ] **10.10 Combat resolution (8.2).** Optional automated damage/target selection feeding status changes.
 
 ### Polish / mobile (9.x)
-- [ ] **10.11 Pinch-to-zoom & long-press context menu (9.1).**
+- [~] **10.11 Pinch-to-zoom & long-press context menu (9.1).** _Pan/zoom done in Phase 12; long-press context menu still open._
 - [ ] **10.12 Responsive portrait/landscape + bottom-sheet panels (9.2).**
 - [ ] **10.13 Accessibility (9.3)** — high-contrast mode, ARIA labels.
 - [ ] **10.14 Performance (9.4)** — code-split the ~560 kB bundle, sprite batching, lazy terrain rendering, debounced save.
@@ -165,6 +165,16 @@ A model change rather than a feature: the table has no edges and no fixed size, 
 
 ---
 
+## Phase 12 — Movement Feedback, View Control & Wind Fixes
+
+- [x] **12.1 In-irons drift ran across the wind (bug).** Drift was computed 8 points from the wind rather than 16, so a ship in irons crabbed 90° sideways instead of falling downwind — in `applyMovementPlan`, `computeAIFirePlan`, the AI's lookahead projections and the canvas ghost path alike. All four now call a single `driftVector(windDirection)` helper, and the canvas wind arrow is written via `windTowardPoint` so it can't be confused with the old form. Regression-tested across all four cardinal winds.
+- [x] **12.2 Min/max on the movement panel (5.2).** `PlayerMovementPanel` shows the legal distance band for the order being written: the minimum (half of last turn's distance, or half the maximum for a ship that has yet to move), and the maximum recomputed live as turn points are added, at 5% off per point. Out-of-range totals are flagged, `min`/`max` shortcuts fill the field, and a plan whose turn points drop the ceiling below the floor says so explicitly.
+- [x] **12.3 First-turn minimum (rules).** `Unit.prevMoveDistance` is now `number | null`; `null` means no movement phase has resolved, which `minMoveDistance()` reads as "half the maximum". The helper is shared by the panel and `enumerateMovementPlans`, so the player and the AI are held to the same floor. Schema 6; pre-6 saves keep their stored number rather than gaining the rule mid-game.
+- [x] **12.4 Pan and zoom (9.1 / 10.11).** Drag empty water to pan, wheel/trackpad or pinch to zoom about the cursor, plus on-screen +/−/Fit controls. The view starts out following the content and switches to manual on the first gesture until **Fit** is pressed. Dragging from a ship or terrain piece still selects or moves it rather than panning, and a drag past the movement threshold suppresses the deselect that a tap would have caused.
+- [x] **12.5 Viewport extracted (code health).** The viewport model — `Viewport`, `contentPoints`, `computeViewport`, `toScreen`/`toWorld`, `panViewport`, `zoomViewport` — moved out of `GameCanvas` into `src/utils/viewport.ts`, where it is unit-tested (anchor pinning, clamping, auto-fit framing). The auto-fit result is also memoised per render pass; it used to be recomputed over all content once per point drawn.
+
+---
+
 ## Dependency Graph (Parallel Tracks)
 
 ```
@@ -185,6 +195,7 @@ Phase 0 (Scaffolding) ✅
 
 - **Track A** (UI-heavy): Phase 0 → 1 → 2 → 3 → 4 → 7  — _done; remaining polish in Phase 10._
 - **Track C** (model change): Phase 11 — _done; touches Phases 2, 3, 5, 6 and 7._
+- **Track D** (feedback & view): Phase 12 — _done; touches Phases 5, 7 and 9._
 - **Track B** (Logic-heavy): Phase 0 → 2 → 5 → 6 → 7  — _done._
 
 ---

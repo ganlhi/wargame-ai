@@ -1,5 +1,5 @@
 import type { Attitude, Unit, MovementPlan, MoveChunk, SpeedRange } from '../types'
-import { computeAttitude } from '../utils/attitude'
+import { computeAttitude, windTowardPoint } from '../utils/attitude'
 
 export const MOVEMENT_STEP = 5
 
@@ -12,6 +12,21 @@ export function getSpeedRangeForAttitude(
 
 export function computeEffectiveMaxSpeed(baseMaxSpeed: number, turnPoints: number): number {
   return Math.max(0, baseMaxSpeed * (1 - turnPoints * 0.05))
+}
+
+/**
+ * Shortest distance a ship is allowed to cover this turn: half of what it
+ * actually covered last turn. A ship that has never had a movement phase
+ * (`prevMoveDistance === null`) has no last turn to halve, so it starts from
+ * half its maximum for the point of sail rather than being free to sit still.
+ *
+ * Measured against the *base* maximum, not the turn-point-reduced one, so the
+ * floor is a fixed number for the turn: turning hard lowers the ceiling towards
+ * it (and past 10 points of turn, below it — which is simply a plan the ship
+ * cannot legally make).
+ */
+export function minMoveDistance(prevMoveDistance: number | null, baseMaxSpeed: number): number {
+  return (prevMoveDistance ?? baseMaxSpeed) / 2
 }
 
 export function splitMovement(distance: number): [number, number, number, number, number] {
@@ -27,6 +42,16 @@ export function splitMovement(distance: number): [number, number, number, number
 export function orientationToVector(orientation: number): { dx: number; dy: number } {
   const angle = (orientation * Math.PI / 16) - Math.PI / 2
   return { dx: Math.cos(angle), dy: Math.sin(angle) }
+}
+
+/**
+ * Unit vector a ship in irons drifts along: straight downwind, i.e. toward the
+ * point the wind blows to. `windDirection` is the point it blows *from*, so
+ * this is 16 points (180°) away — not 8, which would send the ship sideways
+ * across the wind.
+ */
+export function driftVector(windDirection: number): { dx: number; dy: number } {
+  return orientationToVector(windTowardPoint(windDirection))
 }
 
 function getInIronsTurnDirection(orientation: number, windDirection: number): 'port' | 'starboard' {
@@ -86,12 +111,11 @@ export function applyMovementPlan(
 
   for (const chunk of plan.chunks) {
     if (isInIrons) {
-      const driftDir = (windAngle + 8) % 32
-      const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+      const drift = driftVector(windAngle)
       // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
       const driftPerChunk = (unit.driftSpeed ?? 10) / 5
-      x += Math.cos(driftAngle) * driftPerChunk
-      y += Math.sin(driftAngle) * driftPerChunk
+      x += drift.dx * driftPerChunk
+      y += drift.dy * driftPerChunk
     } else {
       const vec = orientationToVector(orientation)
       const nextX = x + vec.dx * chunk.distance
@@ -162,7 +186,7 @@ export function enumerateMovementPlans(
 
   const range = getSpeedRangeForAttitude(computeAttitude(windAngle, unit.orientation), speedProfile)
 
-  const effectiveMinDist = (unit.prevMoveDistance || 0) / 2
+  const effectiveMinDist = minMoveDistance(unit.prevMoveDistance, range.max)
   const startDist = Math.ceil(effectiveMinDist / MOVEMENT_STEP) * MOVEMENT_STEP
   const endDist = range.max
 

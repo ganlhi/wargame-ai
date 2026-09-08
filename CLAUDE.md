@@ -52,13 +52,15 @@ The origin can be re-pointed at any entity from the unit/terrain panel. It is on
 
 ## Movement rules
 
-Units have a maximum and minimum movement range. Between these boundaries, they can move any distance, knowing that the next turn's min distance will be half of what they have moved this time.
+Units have a maximum and minimum movement range. Between these boundaries, they can move any distance, knowing that the next turn's min distance will be half of what they have moved this time. On a ship's very first turn there is no previous move to halve, so its minimum is **half of its maximum**.
+
+The minimum is measured against the ship's base maximum for its point of sail, so it is a fixed number for the turn. The maximum, by contrast, drops 5% per turn point spent (see below) — so a plan with more than 10 turn points pushes the ceiling below the floor, which simply means that plan is not legal.
 
 The selected movement distance is split as evenly as possible in 5 chunks. The ship is allowed to turn port or starboard up to two times during the movement phase, at the end of a chunk. For instance it can move, turn, move, move, turn, move, move. 
 
 Turning is done in "points", knowing that a full 360 degrees circle is divided into 32 points (so 1 point = 11.25 degrees). Each ship has a maximum number of points per game round it can turn. For instance a 4th rate ship can turn 6 points, so it could, during its movement phase, turn 2 points then 4 points, for a total of 6 points; or turn 6 points in one go. It can also turn less than the maximum allowed.
 
-When deciding how many points the ship will turn, it's important to note that each point will reduce the max speed by 5%. For instance, if a ship is able to move maximum 100mm straight ahead, without turning, if it decides to turn 5 points (in one go or split into two turns), then its maximum speed becomes 75mm (to be split in 5 chunks of 15mm).
+When deciding how many points the ship will turn, it's important to note that each point will reduce the max speed by 5%. The movement panel shows the current min and max, with the max updating live as turn points are added to the plan. For instance, if a ship is able to move maximum 100mm straight ahead, without turning, if it decides to turn 5 points (in one go or split into two turns), then its maximum speed becomes 75mm (to be split in 5 chunks of 15mm).
 
 At the end of a movement phase, the new orientation of the ship, in relation to the wind, will dictate how fast it will be able to move next time. If we number the points in relation to the ship's bow from 0 (ship's bow) to 16 (ship's stern), symetrically left and right (so 90 degrees left and right are both numbered 8), we can qualify the following attitudes, depending from which direction the wind is blowing:
 
@@ -70,7 +72,7 @@ At the end of a movement phase, the new orientation of the ship, in relation to 
 
 For most ships, the best to worst attitudes are as follows: quarter reaching, running, reaching, beating, in irons.
 
-There is a special rule about going volontarily in irons: if a ship has spent the previous turn entirely beating, it can turn into the wind (so going "in irons") using as many turn points as possible, and keep turning in the same direction the following game rounds, until it's beating again on the other side. All the time it's in irons, it will not move forward, but instead drift in the direction of the wind. 
+There is a special rule about going volontarily in irons: if a ship has spent the previous turn entirely beating, it can turn into the wind (so going "in irons") using as many turn points as possible, and keep turning in the same direction the following game rounds, until it's beating again on the other side. All the time it's in irons, it will not move forward, but instead drift in the direction of the wind — that is, straight downwind: 16 points from the direction the wind blows from, never across it. 
 
 ## AI unit "style"
 
@@ -96,4 +98,4 @@ This program should be web based, optimised for usage on a small tablet or a big
 
 All table information is entered by hand — there is no photo capture. With no table edges to align to and terrain reduced to primitives, a photograph has nothing left to anchor, so the setup flow is wind direction followed by typed terrain and unit descriptions.
 
-The battlefield view has no fixed extent to draw: it frames whatever is currently in play (ships, their bases, terrain, previewed movement paths and the origin), rescaling as the action spreads out or closes up. 
+The battlefield view has no fixed extent to draw: it frames whatever is currently in play (ships, their bases, terrain and previewed movement paths), rescaling as the action spreads out or closes up. The player can take over that view at any time — drag empty water to pan, scroll or pinch to zoom, or use the on-screen controls — and a **Fit** button hands it back to following the action automatically. 

@@ -7,8 +7,10 @@ import type { GameState, TableTerrain, TerrainShape } from '../types'
  *
  * 5 — infinite table: `tableWidth`/`tableHeight`/`backgroundImage` dropped,
  *     `originId` added, and terrain moved from traced polygons to primitives.
+ * 6 — `Unit.prevMoveDistance` is nullable; `null` means no movement phase has
+ *     been resolved yet, which gives a half-of-maximum minimum move.
  */
-export const CURRENT_SCHEMA_VERSION = 5
+export const CURRENT_SCHEMA_VERSION = 6
 
 type RawRecord = Record<string, unknown>
 
@@ -79,7 +81,10 @@ export function migrateSavedGame(raw: RawRecord): GameState {
   const units = ((raw.units ?? []) as RawRecord[]).map((u) => ({
     ...u,
     prevAttitude: u.prevAttitude ?? 'reaching',
-    prevMoveDistance: u.prevMoveDistance ?? 0,
+    // `null` = no movement phase resolved yet (schema 6). Pre-6 saves stored 0
+    // for both "never moved" and "genuinely didn't move", so they keep 0 rather
+    // than silently gaining a half-max minimum mid-game.
+    prevMoveDistance: (u.prevMoveDistance ?? null) as number | null,
     hiddenAIOrder: u.hiddenAIOrder ?? null,
     playerOrder: u.playerOrder ?? null,
     driftSpeed: u.driftSpeed ?? 10,

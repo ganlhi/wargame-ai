@@ -5,8 +5,10 @@ import {
   orientationToVector,
   applyMovementPlan,
   enumerateMovementPlans,
+  minMoveDistance,
 } from './movement'
 import type { Unit, MovementPlan, MoveChunk, Attitude, SpeedRange } from '../types'
+import { computeAttitude } from '../utils/attitude'
 
 const SPEED_PROFILE: Record<Attitude, SpeedRange> = {
   in_irons: { max: 0 },
@@ -145,10 +147,33 @@ describe('applyMovementPlan', () => {
       maxTurnPoints: 0, // no rotation, so it stays in irons all 5 chunks
     })
     const result = applyMovementPlan(unit, plan(straight(0)), 0)
-    // Drift direction at wind=0 is +x; 50 total drift over the turn.
-    expect(result.position).toEqual({ x: 550, y: 500 })
+    // Wind from the north (point 0) blows toward the south, so the ship drifts
+    // straight downwind: +y, by the full 50mm over the turn.
+    expect(result.position).toEqual({ x: 500, y: 550 })
     expect(result.isInIrons).toBe(true)
     expect(result.distanceTraveled).toBe(0)
+  })
+
+  it('always drifts straight downwind, whatever the wind', () => {
+    // Regression: drift used to be computed 8 points (90°) off the wind rather
+    // than 16, so a ship in irons crabbed sideways instead of falling downwind.
+    const cases: [number, { x: number; y: number }][] = [
+      [0, { x: 0, y: 50 }],   // from N  → drifts S
+      [8, { x: -50, y: 0 }],  // from E  → drifts W
+      [16, { x: 0, y: -50 }], // from S  → drifts N
+      [24, { x: 50, y: 0 }],  // from W  → drifts E
+    ]
+    for (const [windDirection, expected] of cases) {
+      const unit = makeUnit({
+        position: { x: 0, y: 0 },
+        orientation: windDirection, // bow into the wind, so it stays in irons
+        isInIrons: true,
+        driftSpeed: 50,
+        maxTurnPoints: 0,
+      })
+      const result = applyMovementPlan(unit, plan(straight(0)), windDirection)
+      expect(result.position).toEqual(expected)
+    }
   })
 })
 
@@ -170,5 +195,45 @@ describe('enumerateMovementPlans', () => {
     const plans = enumerateMovementPlans(unit, 0, null)
     expect(plans).toHaveLength(1)
     expect(plans[0].chunks.every((c) => c.distance === 0)).toBe(true)
+  })
+})
+
+describe('minMoveDistance', () => {
+  it('is half of the distance actually covered last turn', () => {
+    expect(minMoveDistance(80, 120)).toBe(40)
+    expect(minMoveDistance(0, 120)).toBe(0)
+  })
+
+  it('falls back to half the maximum for a ship that has never moved', () => {
+    expect(minMoveDistance(null, 120)).toBe(60)
+  })
+})
+
+describe('enumerateMovementPlans — minimum move', () => {
+  const totalOf = (p: { chunks: { distance: number }[] }) =>
+    p.chunks.reduce((sum, c) => sum + c.distance, 0)
+
+  it('never offers a plan shorter than half of last turn', () => {
+    // reaching at wind 0 / orientation 8 → max 100 in this fixture.
+    const unit = makeUnit({ orientation: 8, maxTurnPoints: 4, prevMoveDistance: 60 })
+    const plans = enumerateMovementPlans(unit, 0, null)
+    const moving = plans.filter((p) => totalOf(p) > 0)
+    expect(moving.length).toBeGreaterThan(0)
+    for (const p of moving) {
+      expect(totalOf(p)).toBeGreaterThanOrEqual(30)
+    }
+  })
+
+  it('holds a never-moved ship to at least half its maximum', () => {
+    const unit = makeUnit({ orientation: 8, maxTurnPoints: 4, prevMoveDistance: null })
+    const max = unit.speedProfile[computeAttitude(0, 8)].max
+    const plans = enumerateMovementPlans(unit, 0, null)
+    const moving = plans.filter((p) => totalOf(p) > 0)
+    expect(moving.length).toBeGreaterThan(0)
+    for (const p of moving) {
+      expect(totalOf(p)).toBeGreaterThanOrEqual(max / 2)
+    }
+    // ...and it is no longer free to simply sit still.
+    expect(plans.filter((p) => totalOf(p) === 0 && p.totalTurnPoints === 0)).toHaveLength(0)
   })
 })

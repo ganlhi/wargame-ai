@@ -159,7 +159,9 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
         })),
       attitude: computedAttitude,
       prevAttitude: computedAttitude,
-      prevMoveDistance: 0,
+      // No movement phase resolved yet: this turn's minimum comes from half
+      // the maximum rather than half of a previous move.
+      prevMoveDistance: unit?.prevMoveDistance ?? null,
       hiddenAIOrder: null,
       playerOrder: null,
       hiddenAIFirePlan: null,

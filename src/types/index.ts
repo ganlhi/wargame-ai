@@ -130,7 +130,12 @@ export interface Unit {
   // Id of the unit this one is grappled to (mutual). null when not grappled.
   grappledWith: string | null
   prevAttitude: Attitude
-  prevMoveDistance: number
+  /**
+   * Distance actually covered in the last movement phase, which sets this
+   * turn's minimum (half of it). `null` means the ship has not moved yet, so
+   * there is no last turn to halve — see `minMoveDistance`.
+   */
+  prevMoveDistance: number | null
   hiddenAIOrder: MovementPlan | null
   playerOrder: MovementPlan | null
   lastFireChunk: number | null

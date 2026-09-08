@@ -4,13 +4,15 @@ import { useGameStore } from '../stores/gameStore'
 import { TERRAIN_COLORS } from './TerrainPanel'
 import type { GameState, TerrainType, UnitStatus } from '../types'
 import { arcSideToAngles } from '../types'
-import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
-import { orientationToVector } from '../game/movement'
+import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
+import { orientationToVector, driftVector } from '../game/movement'
 import type { Point } from '../utils/geometry'
-import { baseCorners, terrainPolygon } from '../utils/geometry'
+import { terrainPolygon } from '../utils/geometry'
 import {
   formatOffset, originPoint, terrainReferencePoint, toOffset, unitReferencePoint,
 } from '../utils/coordinates'
+import type { Viewport } from '../utils/viewport'
+import { PADDING, computeViewport, panViewport, toScreen, toWorld, zoomViewport } from '../utils/viewport'
 
 const GRID_COLOR = 0xffffff
 const GRID_ALPHA = 0.06
@@ -19,98 +21,17 @@ const ORIGIN_COLOR = 0x38bdf8
 const TERRAIN_FILL_ALPHA = 0.35
 const TERRAIN_BORDER_WIDTH = 2
 
-const PADDING = 28
-
 /**
- * The table is infinite, so the view frames whatever is actually in play rather
- * than a fixed rectangle. `MIN_SPAN` stops a lone ship from being magnified to
- * absurdity, and `CONTENT_MARGIN` keeps content off the very edge of the canvas.
+ * Every point the view needs to show is derived in `src/utils/viewport.ts`; the
+ * grid spacing here just follows whatever scale that lands on.
  */
-const MIN_SPAN = 800
-const CONTENT_MARGIN = 150
 
 /** Grid spacings tried in order; the first that isn't visually dense wins. */
 const GRID_STEPS = [50, 100, 250, 500, 1000, 2500, 5000]
 const MAX_GRID_LINES = 40
 
-interface Viewport {
-  scale: number
-  offsetX: number
-  offsetY: number
-}
-
-/**
- * Every world point the view needs to show: ship bases, terrain outlines, the
- * origin, and any movement path currently previewed (so a plan is never drawn
- * off-screen).
- */
-function contentPoints(game: GameState): Point[] {
-  const pts: Point[] = [originPoint(game)]
-
-  for (const t of game.terrain) {
-    pts.push(...terrainPolygon(t))
-  }
-
-  for (const u of game.units) {
-    if (u.baseWidth > 0 && u.baseLength > 0) {
-      pts.push(...baseCorners(u.position, u.orientation, u.baseWidth, u.baseLength))
-    } else {
-      pts.push(u.position)
-    }
-
-    const plan = u.hiddenAIOrder ?? u.playerOrder
-    if (!plan) continue
-    let orient = u.orientation
-    let p = { ...u.position }
-    for (const chunk of plan.chunks) {
-      if (u.isInIrons) {
-        const driftAngle = (((game.windDirection + 8) % 32) * Math.PI) / 16 - Math.PI / 2
-        p = {
-          x: p.x + Math.cos(driftAngle) * ((u.driftSpeed ?? 10) / 5),
-          y: p.y + Math.sin(driftAngle) * ((u.driftSpeed ?? 10) / 5),
-        }
-      } else {
-        const vec = orientationToVector(orient)
-        p = { x: p.x + vec.dx * chunk.distance, y: p.y + vec.dy * chunk.distance }
-      }
-      pts.push(p)
-      if (chunk.turn) {
-        orient = (orient + (chunk.turn.direction === 'starboard' ? chunk.turn.points : -chunk.turn.points) + 32) % 32
-      }
-    }
-  }
-
-  return pts
-}
-
-function computeViewport(game: GameState | null, w: number, h: number): Viewport {
-  if (!game || w <= 0 || h <= 0) return { scale: 1, offsetX: 0, offsetY: 0 }
-
-  const pts = contentPoints(game)
-  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
-  for (const p of pts) {
-    if (p.x < minX) minX = p.x
-    if (p.x > maxX) maxX = p.x
-    if (p.y < minY) minY = p.y
-    if (p.y > maxY) maxY = p.y
-  }
-  if (!Number.isFinite(minX)) {
-    minX = maxX = minY = maxY = 0
-  }
-
-  minX -= CONTENT_MARGIN
-  minY -= CONTENT_MARGIN
-  maxX += CONTENT_MARGIN
-  maxY += CONTENT_MARGIN
-
-  const cx = (minX + maxX) / 2
-  const cy = (minY + maxY) / 2
-  const spanX = Math.max(maxX - minX, MIN_SPAN)
-  const spanY = Math.max(maxY - minY, MIN_SPAN)
-
-  const scale = Math.min((w - PADDING * 2) / spanX, (h - PADDING * 2) / spanY)
-  return { scale, offsetX: w / 2 - cx * scale, offsetY: h / 2 - cy * scale }
-}
+/** How far a pointer must travel before a tap becomes a pan, in pixels. */
+const PAN_THRESHOLD = 4
 
 function getStatusColor(status: UnitStatus): number | null {
   switch (status) {
@@ -148,6 +69,9 @@ export function GameCanvas({
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null)
   const [movingTerrainId, setMovingTerrainId] = useState<string | null>(null)
+  // null = follow the content automatically; set = the player has taken manual
+  // control of the view by panning or zooming, until they hit Fit.
+  const [view, setView] = useState<Viewport | null>(null)
   const [placementCursorPos, setPlacementCursorPos] = useState<{
     screenX: number
     screenY: number
@@ -165,6 +89,11 @@ export function GameCanvas({
   const sizeRef = useRef({ w: 0, h: 0 })
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
   const moveDragStart = useRef<{ world: Point; center: Point } | null>(null)
+  // A drag only pans when it began on empty water — starting on a ship or a
+  // terrain piece is a selection (or a terrain move), not a pan.
+  const panAllowedRef = useRef(false)
+  const didPanRef = useRef(false)
+  const viewportForRef = useRef<(w: number, h: number) => Viewport>(() => ({ scale: 1, offsetX: 0, offsetY: 0 }))
   const handleMoveDragRef = useRef<(sx: number, sy: number) => void>(() => {})
   const renderGridRef = useRef<() => void>(() => {})
   const renderTerrainRef = useRef<() => void>(() => {})
@@ -181,29 +110,36 @@ export function GameCanvas({
     return { w: el.clientWidth, h: el.clientHeight }
   }, [])
 
+  // The auto-fit viewport is derived from every point on the table, and
+  // worldToScreen asks for it once per point drawn, so memoise it per render
+  // pass rather than recomputing the content bounds thousands of times.
+  const autoViewportCache = useRef<{ game: GameState | null; w: number; h: number; vp: Viewport } | null>(null)
+
   const viewportFor = useCallback(
-    (w: number, h: number) => computeViewport(currentGame, w, h),
-    [currentGame],
+    (w: number, h: number): Viewport => {
+      if (view) return view
+      const cached = autoViewportCache.current
+      if (cached && cached.game === currentGame && cached.w === w && cached.h === h) return cached.vp
+      const vp = computeViewport(currentGame, w, h)
+      autoViewportCache.current = { game: currentGame, w, h, vp }
+      return vp
+    },
+    [view, currentGame],
   )
 
   const worldToScreen = useCallback(
-    (wx: number, wy: number, w: number, h: number) => {
-      const v = viewportFor(w, h)
-      return { x: wx * v.scale + v.offsetX, y: wy * v.scale + v.offsetY }
-    },
+    (wx: number, wy: number, w: number, h: number) => toScreen(viewportFor(w, h), wx, wy),
     [viewportFor],
   )
 
   const screenToWorld = useCallback(
-    (sx: number, sy: number, w: number, h: number) => {
-      const v = viewportFor(w, h)
-      return { x: (sx - v.offsetX) / v.scale, y: (sy - v.offsetY) / v.scale }
-    },
+    (sx: number, sy: number, w: number, h: number) => toWorld(viewportFor(w, h), sx, sy),
     [viewportFor],
   )
 
   const screenToWorldRef = useRef(screenToWorld)
   useEffect(() => { screenToWorldRef.current = screenToWorld }, [screenToWorld])
+  useEffect(() => { viewportForRef.current = viewportFor }, [viewportFor])
 
   const origin = currentGame ? originPoint(currentGame) : { x: 0, y: 0 }
   const originRef = useRef(origin)
@@ -227,6 +163,126 @@ export function GameCanvas({
     el.addEventListener('pointermove', onMove)
     return () => el.removeEventListener('pointermove', onMove)
   }, [placementMode, screenToWorld])
+
+  /**
+   * Pan and zoom. Both work by snapshotting the viewport when the gesture
+   * starts and deriving the new one from the total pointer delta, so a long
+   * drag can't accumulate rounding drift. Zooming keeps the world point under
+   * the cursor (or under the pinch midpoint) pinned where it is.
+   */
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+
+    const pointers = new Map<number, { x: number; y: number }>()
+    let gesture:
+      | { kind: 'pan'; startView: Viewport; startX: number; startY: number }
+      | { kind: 'pinch'; startView: Viewport; startDist: number; startMidX: number; startMidY: number }
+      | null = null
+
+    const localPoint = (e: { clientX: number; clientY: number }) => {
+      const rect = el.getBoundingClientRect()
+      return { x: e.clientX - rect.left, y: e.clientY - rect.top }
+    }
+    const currentViewport = () => {
+      const { w, h } = sizeRef.current
+      return viewportForRef.current(w, h)
+    }
+
+    const onPointerDown = (e: PointerEvent) => {
+      pointers.set(e.pointerId, localPoint(e))
+      didPanRef.current = false
+
+      if (pointers.size === 2) {
+        // Pinch beats everything, wherever it starts.
+        const [a, b] = [...pointers.values()]
+        gesture = {
+          kind: 'pinch',
+          startView: currentViewport(),
+          startDist: Math.hypot(a.x - b.x, a.y - b.y) || 1,
+          startMidX: (a.x + b.x) / 2,
+          startMidY: (a.y + b.y) / 2,
+        }
+      } else if (pointers.size === 1 && panAllowedRef.current && !moveDragStart.current) {
+        const p = localPoint(e)
+        gesture = { kind: 'pan', startView: currentViewport(), startX: p.x, startY: p.y }
+      } else {
+        gesture = null
+      }
+    }
+
+    const onPointerMove = (e: PointerEvent) => {
+      if (!pointers.has(e.pointerId)) return
+      pointers.set(e.pointerId, localPoint(e))
+      if (!gesture) return
+
+      if (gesture.kind === 'pan') {
+        const p = localPoint(e)
+        const dx = p.x - gesture.startX
+        const dy = p.y - gesture.startY
+        if (!didPanRef.current && Math.hypot(dx, dy) < PAN_THRESHOLD) return
+        didPanRef.current = true
+        setView(panViewport(gesture.startView, dx, dy))
+        return
+      }
+
+      if (pointers.size < 2) return
+      const [a, b] = [...pointers.values()]
+      const dist = Math.hypot(a.x - b.x, a.y - b.y) || 1
+      didPanRef.current = true
+      // Track the midpoint too, so a two-finger drag pans while it zooms.
+      const zoomed = zoomViewport(
+        gesture.startView, dist / gesture.startDist, gesture.startMidX, gesture.startMidY,
+      )
+      // Then carry the whole thing along with the midpoint, so two fingers pan
+      // as well as pinch.
+      setView(panViewport(zoomed, (a.x + b.x) / 2 - gesture.startMidX, (a.y + b.y) / 2 - gesture.startMidY))
+    }
+
+    const endPointer = (e: PointerEvent) => {
+      pointers.delete(e.pointerId)
+      if (pointers.size < 2) gesture = null
+      if (pointers.size === 0) {
+        panAllowedRef.current = false
+        // Let the Pixi pointerup handler see that this was a drag, then clear.
+        requestAnimationFrame(() => { didPanRef.current = false })
+      }
+    }
+
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault()
+      const p = localPoint(e)
+      // Ctrl+wheel is the trackpad pinch gesture; both zoom here.
+      const factor = Math.exp(-e.deltaY * (e.ctrlKey ? 0.01 : 0.0015))
+      setView(zoomViewport(currentViewport(), factor, p.x, p.y))
+    }
+
+    // Down on the canvas, but move/up on the window: a drag that runs off the
+    // edge must keep panning and must still end cleanly. Pointer capture would
+    // do the same but would retarget the events away from Pixi's own canvas
+    // listeners, breaking selection.
+    el.addEventListener('pointerdown', onPointerDown)
+    window.addEventListener('pointermove', onPointerMove)
+    window.addEventListener('pointerup', endPointer)
+    window.addEventListener('pointercancel', endPointer)
+    el.addEventListener('wheel', onWheel, { passive: false })
+    return () => {
+      el.removeEventListener('pointerdown', onPointerDown)
+      window.removeEventListener('pointermove', onPointerMove)
+      window.removeEventListener('pointerup', endPointer)
+      window.removeEventListener('pointercancel', endPointer)
+      el.removeEventListener('wheel', onWheel)
+    }
+  }, [])
+
+  /** Zoom by a fixed step about the middle of the canvas (the on-screen buttons). */
+  const zoomByStep = useCallback(
+    (factor: number) => {
+      const { w, h } = sizeRef.current
+      setView(zoomViewport(viewportFor(w, h), factor, w / 2, h / 2))
+    },
+    [viewportFor],
+  )
 
   const renderGrid = useCallback(() => {
     const gc = gridContainerRef.current
@@ -304,6 +360,7 @@ export function GameCanvas({
       g.on('pointerdown', (e) => {
         if (placementModeRef.current) return
         e.stopPropagation()
+        panAllowedRef.current = false
 
         if (t.id === movingTerrainId) {
           const world = screenToWorldRef.current(e.global.x, e.global.y, w, h)
@@ -408,6 +465,7 @@ export function GameCanvas({
       g.on('pointerdown', (e) => {
         if (placementModeRef.current) return
         e.stopPropagation()
+        panAllowedRef.current = false
         setSelectedUnitId(unitId)
         setSelectedTerrainId(null)
         setMenuPos(null)
@@ -451,7 +509,9 @@ export function GameCanvas({
       g.stroke({ color: 0xffffff, width: 1, alpha: 0.25 })
     }
 
-    const windAngle = (currentGame.windDirection + 8) * Math.PI / 16
+    // Screen angle of the point the wind blows toward. Written via
+    // windTowardPoint so it can't be confused with the "+8" (90° off) form.
+    const windAngle = (windTowardPoint(currentGame.windDirection) * Math.PI) / 16 - Math.PI / 2
     const arrowLen = 20
     const arrowOffset = compassR + 4
     const ax = cx + Math.cos(windAngle) * arrowOffset
@@ -485,12 +545,11 @@ export function GameCanvas({
 
       for (const chunk of plan.chunks) {
         if (u.isInIrons) {
-          const driftDir = (currentGame.windDirection + 8) % 32
-          const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+          const drift = driftVector(currentGame.windDirection)
           // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
           const driftPerChunk = (u.driftSpeed ?? 10) / 5
-          px += Math.cos(driftAngle) * driftPerChunk
-          py += Math.sin(driftAngle) * driftPerChunk
+          px += drift.dx * driftPerChunk
+          py += drift.dy * driftPerChunk
         } else {
           const vecAngle = (ox * Math.PI / 16) - Math.PI / 2
           px += Math.cos(vecAngle) * chunk.distance
@@ -657,7 +716,14 @@ export function GameCanvas({
       }
       drawHit()
       hit.eventMode = 'static'
-      hit.on('pointerdown', (e) => {
+      // Pressing empty water arms a pan; the selection/placement decision waits
+      // for the release, so a drag pans the map instead of clearing the
+      // selection out from under it.
+      hit.on('pointerdown', () => {
+        panAllowedRef.current = true
+      })
+      hit.on('pointerup', (e) => {
+        if (didPanRef.current) return
         if (placementModeRef.current && onTableClickRef.current) {
           const { w: cw, h: ch } = sizeRef.current
           if (cw && ch) {
@@ -717,7 +783,7 @@ export function GameCanvas({
     const app = appRef.current
     if (!app || !initialized.current || app.stage.children.length === 0) return
     const hit = app.stage.getChildAt(0) as Graphics
-    hit.cursor = placementMode ? 'crosshair' : 'default'
+    hit.cursor = placementMode ? 'crosshair' : 'grab'
   }, [placementMode])
 
   const selectedTerrain = selectedTerrainId
@@ -730,7 +796,35 @@ export function GameCanvas({
 
   return (
     <div className="flex flex-col flex-1 relative">
-      <div ref={containerRef} className="flex-1" />
+      <div ref={containerRef} className="flex-1" style={{ touchAction: 'none' }} />
+
+      <div className="absolute right-2 bottom-2 flex flex-col gap-1">
+        <button
+          onClick={() => zoomByStep(1.3)}
+          className="w-8 h-8 bg-gray-900/85 border border-gray-700 rounded text-gray-300 hover:text-white text-lg leading-none backdrop-blur-sm transition-colors cursor-pointer"
+          title="Zoom in"
+          aria-label="Zoom in"
+        >
+          +
+        </button>
+        <button
+          onClick={() => zoomByStep(1 / 1.3)}
+          className="w-8 h-8 bg-gray-900/85 border border-gray-700 rounded text-gray-300 hover:text-white text-lg leading-none backdrop-blur-sm transition-colors cursor-pointer"
+          title="Zoom out"
+          aria-label="Zoom out"
+        >
+          &minus;
+        </button>
+        <button
+          onClick={() => setView(null)}
+          disabled={view === null}
+          className="w-8 h-8 bg-gray-900/85 border border-gray-700 rounded text-[10px] font-medium text-gray-300 hover:text-white disabled:opacity-35 disabled:cursor-default backdrop-blur-sm transition-colors cursor-pointer"
+          title={view === null ? 'Already following the action' : 'Fit everything back on screen'}
+          aria-label="Fit view"
+        >
+          Fit
+        </button>
+      </div>
 
       {movingTerrainId && (
         <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded-lg px-4 py-2.5 backdrop-blur-sm flex gap-2 items-center">

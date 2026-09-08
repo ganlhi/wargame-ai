@@ -1,6 +1,6 @@
 import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange, AIAction } from '../types'
 import { arcSideToAngles } from '../types'
-import { enumerateMovementPlans, applyMovementPlan, orientationToVector } from './movement'
+import { enumerateMovementPlans, applyMovementPlan, orientationToVector, driftVector } from './movement'
 import type { Point } from '../utils/geometry'
 import {
   distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle,
@@ -360,12 +360,11 @@ function projectNextPosition(
   windAngle: number,
 ): { x: number; y: number } {
   if (isInIrons) {
-    const driftDir = (windAngle + 8) % 32
-    const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+    const drift = driftVector(windAngle)
     // driftSpeed is the total drift for a whole turn; this projects one turn ahead.
     return {
-      x: pos.x + Math.cos(driftAngle) * driftSpeed,
-      y: pos.y + Math.sin(driftAngle) * driftSpeed,
+      x: pos.x + drift.dx * driftSpeed,
+      y: pos.y + drift.dy * driftSpeed,
     }
   }
   const range = speedProfile[attitude]
@@ -496,12 +495,11 @@ export function suggestMovement(
         const eVec = orientationToVector(e.orientation)
         let ePos = { x: e.position.x + eVec.dx * eSpeed, y: e.position.y + eVec.dy * eSpeed }
         if (e.isInIrons) {
-          const driftDir = (windDirection + 8) % 32
-          const driftAngle = (driftDir * Math.PI / 16) - Math.PI / 2
+          const drift = driftVector(windDirection)
           // driftSpeed is the total drift for a whole turn; this projects one turn ahead.
           ePos = {
-            x: e.position.x + Math.cos(driftAngle) * (e.driftSpeed ?? 10),
-            y: e.position.y + Math.sin(driftAngle) * (e.driftSpeed ?? 10),
+            x: e.position.x + drift.dx * (e.driftSpeed ?? 10),
+            y: e.position.y + drift.dy * (e.driftSpeed ?? 10),
           }
         }
         return { ...e, position: ePos }
