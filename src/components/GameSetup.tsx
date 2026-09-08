@@ -4,20 +4,15 @@ import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
 
 const WIND_POINTS = Array.from({ length: 32 }, (_, i) => i)
 
-interface TableSetupProps {
+interface GameSetupProps {
   onComplete: () => void
 }
 
-export function TableSetup({ onComplete }: TableSetupProps) {
-  const { currentGame, setTableDimensions, setWindDirection } = useGameStore()
-  const [width, setWidth] = useState(String(currentGame?.tableWidth ?? 1200))
-  const [height, setHeight] = useState(String(currentGame?.tableHeight ?? 900))
+export function GameSetup({ onComplete }: GameSetupProps) {
+  const { currentGame, setWindDirection } = useGameStore()
   const [windDir, setWindDir] = useState(currentGame?.windDirection ?? 0)
 
   const handleSubmit = () => {
-    const w = Math.max(100, parseInt(width) || 1200)
-    const h = Math.max(100, parseInt(height) || 900)
-    setTableDimensions(w, h)
     setWindDirection(windDir)
     onComplete()
   }
@@ -26,33 +21,12 @@ export function TableSetup({ onComplete }: TableSetupProps) {
     <div className="flex-1 flex items-center justify-center p-6">
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-8 max-w-lg w-full space-y-6">
         <div>
-          <h2 className="text-xl font-semibold">Table Setup</h2>
-          <p className="text-sm text-gray-400 mt-1">Configure your battlefield dimensions and wind direction.</p>
-        </div>
-
-        <div className="grid grid-cols-2 gap-4">
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1.5">Width (mm)</label>
-            <input
-              type="number"
-              min={100}
-              step={10}
-              value={width}
-              onChange={(e) => setWidth(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-300 mb-1.5">Height (mm)</label>
-            <input
-              type="number"
-              min={100}
-              step={10}
-              value={height}
-              onChange={(e) => setHeight(e.target.value)}
-              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+          <h2 className="text-xl font-semibold">Game Setup</h2>
+          <p className="text-sm text-gray-400 mt-1">
+            The table is treated as infinite — there are no edges to configure. Set the wind, then
+            describe the terrain and ships; the first thing you place becomes the origin all other
+            positions are measured from.
+          </p>
         </div>
 
         <div>
@@ -131,7 +105,7 @@ export function TableSetup({ onComplete }: TableSetupProps) {
           onClick={handleSubmit}
           className="w-full bg-blue-600 hover:bg-blue-500 text-white px-4 py-2.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
         >
-          Continue to Terrain Editor
+          Continue to the Battlefield
         </button>
       </div>
     </div>

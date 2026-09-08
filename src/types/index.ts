@@ -18,10 +18,31 @@ export interface SavedGame {
   unitCount: number
 }
 
+export const TERRAIN_SHAPE_KINDS = ['circle', 'ellipse', 'rectangle'] as const
+export type TerrainShapeKind = (typeof TERRAIN_SHAPE_KINDS)[number]
+
+/**
+ * A terrain piece is entered as a simplified primitive rather than a traced
+ * polygon: pick a shape, give its size, and place its **centre**.
+ *
+ * `width` runs along the shape's own east-west axis before rotation (and is the
+ * diameter of a circle), `height` along its north-south axis. `rotation` is a
+ * 32-point compass value turning the shape clockwise; both `height` and
+ * `rotation` are ignored for circles.
+ */
+export interface TerrainShape {
+  kind: TerrainShapeKind
+  width: number
+  height: number
+  rotation: number
+}
+
 export interface TableTerrain {
   id: string
-  vertices: { x: number; y: number }[]
   type: TerrainType
+  /** Centre of the shape, in world mm. This is the placement reference point. */
+  center: { x: number; y: number }
+  shape: TerrainShape
 }
 
 export const ARC_SIDES = ['bow', 'stern', 'port', 'starboard'] as const
@@ -137,13 +158,18 @@ export interface GameState {
   createdAt: string
   updatedAt: string
   schemaVersion: number
-  tableWidth: number
-  tableHeight: number
+  /**
+   * Id of the unit or terrain piece that anchors the coordinate system. The
+   * table is infinite, so there is no fixed frame to measure from: the first
+   * entity added to the game becomes the origin and every other position is
+   * reported relative to it. Its own coordinates stay (0, 0) even after it
+   * moves. null only while the game is empty.
+   */
+  originId: string | null
   windDirection: number
   terrain: TableTerrain[]
   units: Unit[]
   currentTurn: number
   currentPhase: GamePhase
   actionLog: ActionLogEntry[]
-  backgroundImage?: string
 }

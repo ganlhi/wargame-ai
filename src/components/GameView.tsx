@@ -1,27 +1,28 @@
 import { useState, useCallback } from 'react'
 import { useGameStore } from '../stores/gameStore'
-import { TableSetup } from './TableSetup'
-import { PhotoCapture } from './PhotoCapture'
+import { GameSetup } from './GameSetup'
 import { GameCanvas } from './GameCanvas'
 import { UnitFormModal } from './UnitFormModal'
+import { TerrainFormModal } from './TerrainFormModal'
+import { TerrainPanel } from './TerrainPanel'
 import { PlayerMovementPanel } from './PlayerMovementPanel'
 import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
 import { arcSideLabel } from '../types'
 import { suggestMovement } from '../game/ai'
+import { originName } from '../utils/coordinates'
 import type { Unit } from '../types'
 
 export function GameView() {
-  const { currentGame, hasUnsavedChanges, saveCurrentGame, exitToMenu, setPhase, addTerrain, addUnit, updateUnit, startGame, revealOrders, resolveTurn } = useGameStore()
+  const { currentGame, hasUnsavedChanges, saveCurrentGame, exitToMenu, setPhase, addUnit, updateUnit, startGame, revealOrders, resolveTurn } = useGameStore()
   const [showExitDialog, setShowExitDialog] = useState(false)
-  const [showPhotoCapture, setShowPhotoCapture] = useState(false)
-  const [editingTerrain, setEditingTerrain] = useState(false)
+  const [editingTerrainId, setEditingTerrainId] = useState<string | null>(null)
   const [editingUnitId, setEditingUnitId] = useState<string | null>(null)
   const [placementActive, setPlacementActive] = useState(false)
   const [pendingPosition, setPendingPosition] = useState<{ x: number; y: number } | null>(null)
   const [showActionLog, setShowActionLog] = useState(false)
   const [showBases, setShowBases] = useState(false)
   const [expandedAIUnit, setExpandedAIUnit] = useState<string | null>(null)
-  const hasContent = (currentGame?.terrain?.length ?? 0) > 0 || (currentGame?.units?.length ?? 0) > 0 || !!currentGame?.backgroundImage
+  const hasContent = (currentGame?.terrain?.length ?? 0) > 0 || (currentGame?.units?.length ?? 0) > 0
   const [setupComplete, setSetupComplete] = useState(hasContent)
 
   const handleBack = useCallback(() => {
@@ -46,12 +47,6 @@ export function GameView() {
     if (currentGame) {
       setPhase('setup')
     }
-  }
-
-  const handleFinishTerrain = (vertices: { x: number; y: number }[]) => {
-    if (vertices.length < 3) return
-    addTerrain(vertices, 'island')
-    setEditingTerrain(false)
   }
 
   const handleTableClick = (x: number, y: number) => {
@@ -82,8 +77,6 @@ export function GameView() {
         allUnits,
         game.terrain,
         game.windDirection,
-        game.tableWidth,
-        game.tableHeight,
         existing?.prevAttitude ?? updated.prevAttitude,
         1,
       )
@@ -93,6 +86,8 @@ export function GameView() {
 
   const editingUnit = editingUnitId ? currentGame?.units.find((u) => u.id === editingUnitId) : undefined
   const showUnitForm = editingUnitId !== null
+  const editingTerrain = editingTerrainId ? currentGame?.terrain.find((t) => t.id === editingTerrainId) : undefined
+  const showTerrainForm = editingTerrainId !== null
 
   if (!currentGame) return null
 
@@ -140,7 +135,7 @@ export function GameView() {
             Save
           </button>
         </header>
-        <TableSetup onComplete={handleSetupComplete} />
+        <GameSetup onComplete={handleSetupComplete} />
         {exitDialog}
       </div>
     )
@@ -161,15 +156,15 @@ export function GameView() {
         <div className="flex-1">
           <h1 className="text-base font-semibold">{currentGame.name}</h1>
           <p className="text-xs text-gray-500">
-            {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}{currentGame.tableWidth}&times;{currentGame.tableHeight}mm · Wind &rarr; {COMPASS_LABELS[windTowardPoint(currentGame.windDirection)]} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
+            {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}Wind &rarr; {COMPASS_LABELS[windTowardPoint(currentGame.windDirection)]} · Origin: {originName(currentGame) ?? 'none yet'} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
           </p>
         </div>
         {hasUnsavedChanges && (
           <span className="text-xs text-yellow-500 bg-yellow-500/10 px-2 py-1 rounded">Unsaved</span>
         )}
-        {currentGame.currentPhase === 'setup' && !editingTerrain && editingUnitId === null && !placementActive && (
+        {currentGame.currentPhase === 'setup' && editingTerrainId === null && editingUnitId === null && !placementActive && (
           <button
-            onClick={() => setEditingTerrain(true)}
+            onClick={() => setEditingTerrainId('new')}
             className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
             title="Add terrain"
           >
@@ -183,15 +178,6 @@ export function GameView() {
             title="Add unit"
           >
             + Unit
-          </button>
-        )}
-        {currentGame.currentPhase === 'setup' && (
-          <button
-            onClick={() => setShowPhotoCapture(true)}
-            className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
-            title="Capture table photo"
-          >
-            📷
           </button>
         )}
         {currentGame.currentPhase === 'setup' && (
@@ -242,10 +228,8 @@ export function GameView() {
 
       <main className="flex-1 flex flex-col relative overflow-hidden">
         <GameCanvas
-          editingTerrain={editingTerrain}
-          onFinishEdit={handleFinishTerrain}
-          onCancelEdit={() => setEditingTerrain(false)}
           onEditUnit={(id) => setEditingUnitId(id)}
+          onEditTerrain={(id) => setEditingTerrainId(id)}
           placementMode={placementActive}
           onTableClick={handleTableClick}
           showBases={showBases}
@@ -253,7 +237,7 @@ export function GameView() {
         {placementActive && (
           <div className="absolute inset-x-0 top-0 flex items-center justify-center pointer-events-none">
             <div className="bg-gray-900/90 border border-gray-700 rounded-b-lg px-4 py-2 flex items-center gap-3 pointer-events-auto backdrop-blur-sm">
-              <span className="text-xs text-gray-300">Click on the battlefield to place the unit</span>
+              <span className="text-xs text-gray-300">Click on the battlefield to set the ship's stern position</span>
               <button
                 onClick={() => setPlacementActive(false)}
                 className="text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1 transition-colors cursor-pointer"
@@ -363,6 +347,13 @@ export function GameView() {
         )}
       </main>
 
+      {currentGame.currentPhase === 'setup' && (
+        <TerrainPanel
+          onAddClick={() => setEditingTerrainId('new')}
+          onEditTerrain={(id) => setEditingTerrainId(id)}
+        />
+      )}
+
       {showUnitForm && (
         <UnitFormModal
           unit={editingUnit}
@@ -372,7 +363,9 @@ export function GameView() {
         />
       )}
 
-      {showPhotoCapture && <PhotoCapture onClose={() => setShowPhotoCapture(false)} />}
+      {showTerrainForm && (
+        <TerrainFormModal terrain={editingTerrain} onClose={() => setEditingTerrainId(null)} />
+      )}
 
       {exitDialog}
     </div>

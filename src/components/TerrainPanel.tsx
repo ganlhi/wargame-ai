@@ -1,5 +1,6 @@
 import { useGameStore } from '../stores/gameStore'
 import type { TerrainType } from '../types'
+import { formatOffset, originPoint, toOffset } from '../utils/coordinates'
 
 const TERRAIN_COLORS: Record<TerrainType, { fill: string; border: string; label: string }> = {
   island: { fill: '#4ade80', border: '#22c55e', label: 'Island' },
@@ -9,14 +10,16 @@ const TERRAIN_COLORS: Record<TerrainType, { fill: string; border: string; label:
 
 interface TerrainPanelProps {
   onAddClick: () => void
+  onEditTerrain?: (terrainId: string) => void
 }
 
-export function TerrainPanel({ onAddClick }: TerrainPanelProps) {
+export function TerrainPanel({ onAddClick, onEditTerrain }: TerrainPanelProps) {
   const { currentGame, updateTerrain, removeTerrain } = useGameStore()
 
   if (!currentGame) return null
 
   const { terrain } = currentGame
+  const origin = originPoint(currentGame)
 
   return (
     <div className="border-t border-gray-800 bg-gray-950 p-4">
@@ -34,7 +37,7 @@ export function TerrainPanel({ onAddClick }: TerrainPanelProps) {
 
       {terrain.length === 0 ? (
         <p className="text-xs text-gray-500 text-center py-4">
-          No terrain placed yet. Click "Add" and then click on the table to place vertices.
+          No terrain placed yet. Click "Add" to describe a piece by shape, size and position.
         </p>
       ) : (
         <ul className="space-y-1.5 max-h-40 overflow-y-auto">
@@ -58,9 +61,23 @@ export function TerrainPanel({ onAddClick }: TerrainPanelProps) {
                   </option>
                 ))}
               </select>
-              <span className="text-gray-400 flex-1">
-                {t.vertices.length} vert{t.vertices.length !== 1 ? 's' : 'ex'}
+              <span className="text-gray-400 flex-1 truncate">
+                {t.shape.kind === 'circle'
+                  ? `⌀${t.shape.width}mm`
+                  : `${t.shape.width}×${t.shape.height}mm`}
+                {' · '}
+                {currentGame.originId === t.id
+                  ? 'origin'
+                  : formatOffset(toOffset(t.center, origin))}
               </span>
+              {onEditTerrain && (
+                <span
+                  className="text-gray-500 hover:text-blue-400 cursor-pointer px-1"
+                  onClick={() => onEditTerrain(t.id)}
+                >
+                  ✎
+                </span>
+              )}
               <span
                 className="text-gray-500 hover:text-red-400 cursor-pointer px-1"
                 onClick={() => removeTerrain(t.id)}

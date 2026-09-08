@@ -7,14 +7,13 @@ import { suggestMovement, decideAggressiveAction } from '../game/ai'
 import { computeAIFirePlan } from '../game/combat'
 import { applyGrapple, clearGrappleForRemoved } from '../game/grapple'
 import { computeAttitude } from '../utils/attitude'
+import { formatWorldPoint, sternMidpoint } from '../utils/coordinates'
 import { migrateSavedGame, CURRENT_SCHEMA_VERSION } from './migrations'
 
 interface GameStore {
   savedGames: SavedGame[]
   currentGame: GameState | null
   hasUnsavedChanges: boolean
-  defaultTableWidth: number
-  defaultTableHeight: number
 
   createGame: (name: string) => string
   loadGame: (id: string) => void
@@ -23,13 +22,12 @@ interface GameStore {
   exitToMenu: () => void
   markChanged: () => void
 
-  setTableDimensions: (width: number, height: number) => void
   setWindDirection: (direction: number) => void
   setPhase: (phase: GamePhase) => void
   nextTurn: () => void
-  setBackgroundImage: (dataUrl: string) => void
+  setOrigin: (id: string) => void
 
-  addTerrain: (vertices: { x: number; y: number }[], type: TableTerrain['type']) => void
+  addTerrain: (terrain: Omit<TableTerrain, 'id'>) => void
   updateTerrain: (id: string, updates: Partial<TableTerrain>) => void
   removeTerrain: (id: string) => void
 
@@ -46,7 +44,24 @@ interface GameStore {
 
 const now = () => new Date().toISOString()
 
-function createInitialGame(name: string, defaultWidth: number, defaultHeight: number): GameState {
+/**
+ * Pick the origin after an entity is deleted. A destroyed or surrendered ship
+ * is still a model sitting on the table, so it stays a valid reference point —
+ * only actually removing it from the game gives up the anchor, at which point
+ * the next remaining entity takes over. World coordinates are untouched; only
+ * the frame the readouts use shifts.
+ */
+function reassignOrigin(
+  game: GameState,
+  removedId: string,
+  units: Unit[],
+  terrain: TableTerrain[],
+): string | null {
+  if (game.originId !== removedId) return game.originId
+  return units[0]?.id ?? terrain[0]?.id ?? null
+}
+
+function createInitialGame(name: string): GameState {
   const id = uuid()
   const timestamp = now()
   return {
@@ -55,8 +70,7 @@ function createInitialGame(name: string, defaultWidth: number, defaultHeight: nu
     createdAt: timestamp,
     updatedAt: timestamp,
     schemaVersion: CURRENT_SCHEMA_VERSION,
-    tableWidth: defaultWidth,
-    tableHeight: defaultHeight,
+    originId: null,
     windDirection: 0,
     terrain: [],
     units: [],
@@ -72,12 +86,9 @@ export const useGameStore = create<GameStore>()(
       savedGames: [],
       currentGame: null,
       hasUnsavedChanges: false,
-      defaultTableWidth: 1200,
-      defaultTableHeight: 900,
 
       createGame: (name) => {
-        const { defaultTableWidth, defaultTableHeight } = get()
-        const game = createInitialGame(name, defaultTableWidth, defaultTableHeight)
+        const game = createInitialGame(name)
         set((state) => ({
           savedGames: [
             ...state.savedGames,
@@ -139,13 +150,18 @@ export const useGameStore = create<GameStore>()(
         set({ hasUnsavedChanges: true })
       },
 
-      setTableDimensions: (width, height) => {
+      /**
+       * Re-anchor the coordinate system onto another entity. Nothing on the
+       * table moves — only the frame positions are reported in.
+       */
+      setOrigin: (id) => {
         const game = get().currentGame
         if (!game) return
+        const exists =
+          game.units.some((u) => u.id === id) || game.terrain.some((t) => t.id === id)
+        if (!exists) return
         set({
-          currentGame: { ...game, tableWidth: width, tableHeight: height, updatedAt: now() },
-          defaultTableWidth: width,
-          defaultTableHeight: height,
+          currentGame: { ...game, originId: id, updatedAt: now() },
           hasUnsavedChanges: true,
         })
       },
@@ -182,23 +198,16 @@ export const useGameStore = create<GameStore>()(
         })
       },
 
-      setBackgroundImage: (dataUrl) => {
+      addTerrain: (spec) => {
         const game = get().currentGame
         if (!game) return
-        set({
-          currentGame: { ...game, backgroundImage: dataUrl, updatedAt: now() },
-          hasUnsavedChanges: true,
-        })
-      },
-
-      addTerrain: (vertices, type) => {
-        const game = get().currentGame
-        if (!game) return
-        const terrain: TableTerrain = { id: uuid(), vertices, type }
+        const terrain: TableTerrain = { ...spec, id: uuid() }
         set({
           currentGame: {
             ...game,
             terrain: [...game.terrain, terrain],
+            // First entity placed defines the origin for everything else.
+            originId: game.originId ?? terrain.id,
             updatedAt: now(),
           },
           hasUnsavedChanges: true,
@@ -221,10 +230,12 @@ export const useGameStore = create<GameStore>()(
       removeTerrain: (id) => {
         const game = get().currentGame
         if (!game) return
+        const terrain = game.terrain.filter((t) => t.id !== id)
         set({
           currentGame: {
             ...game,
-            terrain: game.terrain.filter((t) => t.id !== id),
+            terrain,
+            originId: reassignOrigin(game, id, game.units, terrain),
             updatedAt: now(),
           },
           hasUnsavedChanges: true,
@@ -238,6 +249,8 @@ export const useGameStore = create<GameStore>()(
           currentGame: {
             ...game,
             units: [...game.units, unit],
+            // First entity placed defines the origin for everything else.
+            originId: game.originId ?? unit.id,
             updatedAt: now(),
           },
           hasUnsavedChanges: true,
@@ -260,10 +273,12 @@ export const useGameStore = create<GameStore>()(
       removeUnit: (id) => {
         const game = get().currentGame
         if (!game) return
+        const units = clearGrappleForRemoved(game.units, id)
         set({
           currentGame: {
             ...game,
-            units: clearGrappleForRemoved(game.units, id),
+            units,
+            originId: reassignOrigin(game, id, units, game.terrain),
             updatedAt: now(),
           },
           hasUnsavedChanges: true,
@@ -319,8 +334,6 @@ export const useGameStore = create<GameStore>()(
                 updated.units,
                 updated.terrain,
                 updated.windDirection,
-                updated.tableWidth,
-                updated.tableHeight,
                 u.prevAttitude,
                 1,
               )
@@ -337,14 +350,7 @@ export const useGameStore = create<GameStore>()(
         const units = game.units.map((u) => {
           if (u.side !== 'ai' || u.status === 'destroyed' || u.status === 'surrendered') return u
           const firePlan = computeAIFirePlan(u, game.units, game.windDirection)
-          const action = decideAggressiveAction(
-            u,
-            u.hiddenAIOrder,
-            game.units,
-            game.windDirection,
-            game.tableWidth,
-            game.tableHeight,
-          )
+          const action = decideAggressiveAction(u, u.hiddenAIOrder, game.units, game.windDirection)
           return {
             ...u,
             hiddenAIFirePlan: firePlan,
@@ -382,21 +388,15 @@ export const useGameStore = create<GameStore>()(
         if (!game || game.currentPhase !== 'reveal') return
 
         const units = [...game.units]
+        const moves: { unit: Unit; result: ReturnType<typeof applyMovementPlan> }[] = []
 
         for (let i = 0; i < units.length; i++) {
           const u = units[i]
           const plan = u.side === 'ai' ? u.hiddenAIOrder : u.playerOrder
           if (!plan) continue
 
-          const result = applyMovementPlan(u, plan, game.windDirection, game.tableWidth, game.tableHeight)
-          const drift = result.isInIrons ? ` (drifted ${u.driftSpeed}mm)` : ''
-          const boundary = result.hitBoundary ? ' [hit table edge]' : ''
-          get().addLogEntry({
-            turn: game.currentTurn,
-            unitId: u.id,
-            unitName: u.name,
-            text: `${u.name} moved to (${Math.round(result.position.x)}, ${Math.round(result.position.y)}) heading ${result.orientation}pts${drift}${boundary}`,
-          })
+          const result = applyMovementPlan(u, plan, game.windDirection)
+          moves.push({ unit: u, result })
           units[i] = {
             ...u,
             position: result.position,
@@ -411,20 +411,35 @@ export const useGameStore = create<GameStore>()(
           }
         }
 
+        // Log positions in the frame the player reads on screen: an offset from
+        // the origin entity. Everything moves simultaneously, so the offsets are
+        // only meaningful once every ship has been resolved — including the
+        // origin ship itself, which may well have moved this turn.
+        const resolved = { ...game, units }
+        const logEntries: ActionLogEntry[] = moves.map(({ unit: u, result }) => {
+          const drift = result.isInIrons ? ` (drifted ${u.driftSpeed}mm)` : ''
+          const where = formatWorldPoint(
+            sternMidpoint(result.position, result.orientation, u.baseLength),
+            resolved,
+          )
+          return {
+            turn: game.currentTurn,
+            unitId: u.id,
+            unitName: u.name,
+            text: `${u.name} moved to ${where} heading ${result.orientation}pts${drift}`,
+          }
+        })
+
         const nextTurn = game.currentTurn + 1
         // The AI's grapple/board intent (hiddenAIAction) is only a suggestion,
         // shown during reveal like the fire plan — it is NOT auto-applied. The
         // player confirms an actual grapple via the unit panel. Clear the
-        // suggestion now that the turn is resolving. Read the latest log (the
-        // per-move entries above were appended via addLogEntry) so they aren't
-        // clobbered by spreading the stale `game`.
-        const priorLog = get().currentGame?.actionLog ?? game.actionLog
-
+        // suggestion now that the turn is resolving.
         set({
           currentGame: {
             ...game,
             units: units.map((u) => ({ ...u, hiddenAIAction: null })),
-            actionLog: priorLog,
+            actionLog: [...game.actionLog, ...logEntries],
             currentTurn: nextTurn,
             currentPhase: 'orders',
             updatedAt: now(),
@@ -441,8 +456,6 @@ export const useGameStore = create<GameStore>()(
                 updated.units,
                 updated.terrain,
                 updated.windDirection,
-                updated.tableWidth,
-                updated.tableHeight,
                 u.prevAttitude,
                 1,
               )
@@ -456,8 +469,6 @@ export const useGameStore = create<GameStore>()(
       name: 'wargame-ai-store',
       partialize: (state) => ({
         savedGames: state.savedGames,
-        defaultTableWidth: state.defaultTableWidth,
-        defaultTableHeight: state.defaultTableHeight,
       }),
     }
   )

@@ -1,7 +1,12 @@
 import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange, AIAction } from '../types'
 import { arcSideToAngles } from '../types'
 import { enumerateMovementPlans, applyMovementPlan, orientationToVector } from './movement'
-import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle, baseCorners, polygonsIntersect, polygonDistance } from '../utils/geometry'
+import type { Point } from '../utils/geometry'
+import {
+  distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle,
+  baseCorners, polygonsIntersect, polygonDistance,
+  terrainPolygon, pointInPolygon, pointPolygonEdgeDistance,
+} from '../utils/geometry'
 
 // Centre-to-centre grapple range is unreachable once ship bases are accounted
 // for, so grapple proximity is measured as the gap between the two bases.
@@ -19,21 +24,28 @@ export function baseGap(a: Unit, b: Unit): number {
 export function basesWithinGrapple(a: Unit, b: Unit): boolean {
   return baseGap(a, b) <= GRAPPLE_RANGE
 }
-const EDGE_DANGER = 120
-const EDGE_PENALTY_MULT = 2
 const TERRAIN_DANGER = 30
 const TERRAIN_PENALTY_MULT = 0.5
 
-const BOUNDARY_PENALTY = -5000
-const FUTURE_BOUNDARY_PENALTY = -3000
 const LOOKAHEAD_DISCOUNT = 0.5
 
-function getEnemyMaxRange(enemy: Unit): number {
-  return Math.max(...enemy.firingArcs.map((a) => a.maxRange), 0)
+// The table is infinite, so nothing physically stops a ship from sailing away
+// for ever. What replaces the old table-edge penalty is a soft leash: past a
+// multiple of the longest gun range in play there is no more to be gained by
+// opening the range, so withdrawing further starts to cost. A defensive unit
+// disengages to the edge of usefulness and then holds station there instead of
+// vanishing off into the room.
+const LEASH_MULT = 1.5
+const LEASH_PENALTY_MULT = 0.5
+// Used when neither ship has any armament to derive a range from.
+const LEASH_FALLBACK_RANGE = 400
+
+function maxFiringRange(unit: Unit): number {
+  return Math.max(...unit.firingArcs.map((a) => a.maxRange), 0)
 }
 
 function getRangeTiers(enemy: Unit): { close: number; medium: number; long: number; extreme: number } {
-  const extreme = getEnemyMaxRange(enemy)
+  const extreme = maxFiringRange(enemy)
   const long = extreme * 0.6
   const medium = long * 0.6
   const close = medium * 0.6
@@ -103,49 +115,30 @@ function isEnemyBroadsideOnUnit(unit: Unit, enemy: Unit): boolean {
          inArc(enemyRel, starboardArc.minAngle, starboardArc.maxAngle)
 }
 
-function pointToSegmentDist(
-  p: { x: number; y: number },
-  a: { x: number; y: number },
-  b: { x: number; y: number },
-): number {
-  const abx = b.x - a.x
-  const aby = b.y - a.y
-  const len2 = abx * abx + aby * aby
-  if (len2 === 0) return distance(p, a)
-  let t = ((p.x - a.x) * abx + (p.y - a.y) * aby) / len2
-  t = Math.max(0, Math.min(1, t))
-  const cx = a.x + t * abx
-  const cy = a.y + t * aby
-  return distance(p, { x: cx, y: cy })
-}
+// Terrain pieces are primitives (circle / ellipse / rectangle); discretising
+// each one once keeps a single polygon code path without re-tessellating on
+// every one of the hundreds of candidate plans scored per turn. Terrain objects
+// are replaced rather than mutated by the store, so identity is a safe key.
+const terrainPolygonCache = new WeakMap<TableTerrain, Point[]>()
 
-function pointInTerrain(p: { x: number; y: number }, terrain: TableTerrain[]): boolean {
-  for (const t of terrain) {
-    const v = t.vertices
-    if (v.length < 3) continue
-    let inside = false
-    for (let i = 0, j = v.length - 1; i < v.length; j = i++) {
-      const xi = v[i].x, yi = v[i].y
-      const xj = v[j].x, yj = v[j].y
-      if ((yi > p.y) !== (yj > p.y) && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi) {
-        inside = !inside
-      }
-    }
-    if (inside) return true
+function polygonOf(t: TableTerrain): Point[] {
+  let poly = terrainPolygonCache.get(t)
+  if (!poly) {
+    poly = terrainPolygon(t)
+    terrainPolygonCache.set(t, poly)
   }
-  return false
+  return poly
 }
 
-function minEdgeDistance(pos: { x: number; y: number }, terrain: TableTerrain[]): number {
+function pointInTerrain(p: Point, terrain: TableTerrain[]): boolean {
+  return terrain.some((t) => pointInPolygon(p, polygonOf(t)))
+}
+
+function minEdgeDistance(pos: Point, terrain: TableTerrain[]): number {
   let minDist = Infinity
   for (const t of terrain) {
-    const v = t.vertices
-    if (v.length < 3) continue
-    for (let i = 0; i < v.length; i++) {
-      const j = (i + 1) % v.length
-      const d = pointToSegmentDist(pos, v[i], v[j])
-      if (d < minDist) minDist = d
-    }
+    const d = pointPolygonEdgeDistance(pos, polygonOf(t))
+    if (d < minDist) minDist = d
   }
   return minDist
 }
@@ -223,67 +216,27 @@ function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
   return score
 }
 
-const EDGE_STYLE_MULT: Record<string, number> = {
-  aggressive: 1,
-  cautious: 1.5,
-  defensive: 2,
+/**
+ * Penalise withdrawing beyond the point where distance still buys anything.
+ * The leash is measured against the nearest enemy and sized from the longest
+ * gun range either ship brings, so it scales with the engagement rather than
+ * with a table that no longer exists.
+ */
+function scoreDisengagementLeash(unit: Unit, enemies: Unit[]): number {
+  if (enemies.length === 0) return 0
+
+  const nearest = enemies.reduce((a, b) =>
+    distance(unit.position, a.position) < distance(unit.position, b.position) ? a : b,
+  )
+  const dist = distance(unit.position, nearest.position)
+  const reach = Math.max(maxFiringRange(unit), maxFiringRange(nearest), LEASH_FALLBACK_RANGE)
+  const leash = reach * LEASH_MULT
+
+  if (dist <= leash) return 0
+  return -(dist - leash) * LEASH_PENALTY_MULT
 }
 
-function scoreEdgeProximity(pos: { x: number; y: number }, tableW: number, tableH: number, style: string): number {
-  const edgeDist = Math.min(pos.x, pos.y, tableW - pos.x, tableH - pos.y)
-  if (edgeDist < EDGE_DANGER) {
-    return -(EDGE_DANGER - edgeDist) * EDGE_PENALTY_MULT * (EDGE_STYLE_MULT[style] ?? 1)
-  }
-  return 0
-}
-
-function scoreHeadingTowardEdge(
-  pos: { x: number; y: number },
-  orientation: number,
-  tableW: number,
-  tableH: number,
-  aiStyle: string,
-  nearestEnemyDir: { x: number; y: number } | null,
-): number {
-  const vec = orientationToVector(orientation)
-  const HEADING_WARN = 150
-  const STRENGTH = 2
-
-  let maxPenalty = 0
-  if (pos.x < HEADING_WARN && vec.dx < 0) {
-    maxPenalty = Math.max(maxPenalty, (HEADING_WARN - pos.x) * -vec.dx * STRENGTH)
-  }
-  if ((tableW - pos.x) < HEADING_WARN && vec.dx > 0) {
-    maxPenalty = Math.max(maxPenalty, (HEADING_WARN - (tableW - pos.x)) * vec.dx * STRENGTH)
-  }
-  if (pos.y < HEADING_WARN && vec.dy < 0) {
-    maxPenalty = Math.max(maxPenalty, (HEADING_WARN - pos.y) * -vec.dy * STRENGTH)
-  }
-  if ((tableH - pos.y) < HEADING_WARN && vec.dy > 0) {
-    maxPenalty = Math.max(maxPenalty, (HEADING_WARN - (tableH - pos.y)) * vec.dy * STRENGTH)
-  }
-
-  if (maxPenalty === 0 || !nearestEnemyDir) return -maxPenalty
-
-  const moveLen = Math.sqrt(vec.dx * vec.dx + vec.dy * vec.dy)
-  const enemyLen = Math.sqrt(nearestEnemyDir.x * nearestEnemyDir.x + nearestEnemyDir.y * nearestEnemyDir.y)
-  if (moveLen === 0 || enemyLen === 0) return -maxPenalty
-
-  const dot = (vec.dx * nearestEnemyDir.x + vec.dy * nearestEnemyDir.y) / (moveLen * enemyLen)
-
-  let reduction = 0
-  if (aiStyle === 'defensive' && dot < -0.3) {
-    reduction = 0.5
-  } else if (aiStyle === 'aggressive' && dot > 0.3) {
-    reduction = 0.5
-  } else if (aiStyle === 'cautious') {
-    reduction = 0.2
-  }
-
-  return -(maxPenalty * (1 - reduction))
-}
-
-function scoreTerrainProximity(pos: { x: number; y: number }, terrain: TableTerrain[]): number {
+function scoreTerrainProximity(pos: Point, terrain: TableTerrain[]): number {
   if (terrain.length === 0) return 0
 
   if (pointInTerrain(pos, terrain)) {
@@ -292,14 +245,7 @@ function scoreTerrainProximity(pos: { x: number; y: number }, terrain: TableTerr
 
   let penalty = 0
   for (const t of terrain) {
-    const v = t.vertices
-    if (v.length < 3) continue
-    let minEdgeDist = Infinity
-    for (let i = 0; i < v.length; i++) {
-      const j = (i + 1) % v.length
-      const d = pointToSegmentDist(pos, v[i], v[j])
-      if (d < minEdgeDist) minEdgeDist = d
-    }
+    const minEdgeDist = pointPolygonEdgeDistance(pos, polygonOf(t))
     if (minEdgeDist < TERRAIN_DANGER) {
       penalty -= (TERRAIN_DANGER - minEdgeDist) * TERRAIN_PENALTY_MULT
     }
@@ -363,8 +309,6 @@ export function evaluatePosition(
   unit: Unit,
   enemies: Unit[],
   terrain: TableTerrain[],
-  tableWidth: number,
-  tableHeight: number,
 ): number {
   let score = 0
 
@@ -372,7 +316,7 @@ export function evaluatePosition(
   score += scoreFiring(unit, enemies)
   score += scoreDistanceByStyle(unit, enemies)
   score += scoreStyleSpecific(unit, enemies)
-  score += scoreEdgeProximity(unit.position, tableWidth, tableHeight, unit.aiStyle)
+  score += scoreDisengagementLeash(unit, enemies)
   score += scoreTerrainProximity(unit.position, terrain)
   score += scoreEnemyBroadsideDanger(unit, enemies)
 
@@ -438,8 +382,6 @@ export function suggestMovement(
   allUnits: Unit[],
   terrain: TableTerrain[],
   windDirection: number,
-  tableWidth: number,
-  tableHeight: number,
   prevAttitude: Attitude | null,
   difficulty = 1,
 ): MovementPlan | null {
@@ -463,9 +405,9 @@ export function suggestMovement(
       totalTurnPoints: 0,
       effectiveMaxSpeed: 0,
     }
-    const newState = applyMovementPlan(unit, idlePlan, windDirection, tableWidth, tableHeight)
+    const newState = applyMovementPlan(unit, idlePlan, windDirection)
     const testUnit: Unit = { ...unit, ...newState }
-    const score = evaluatePosition(testUnit, enemies, terrain, tableWidth, tableHeight)
+    const score = evaluatePosition(testUnit, enemies, terrain)
     return selectPlan([idlePlan], [score], difficulty)
   }
 
@@ -492,15 +434,12 @@ export function suggestMovement(
 
   const planCollides: boolean[] = []
   const planScores = plans.map((plan) => {
-    const newState = applyMovementPlan(unit, plan, windDirection, tableWidth, tableHeight)
+    const newState = applyMovementPlan(unit, plan, windDirection)
     // Reject the plan if the base touches another ship at any point along the
     // swept path (waypoints), not just at the final resting pose.
     planCollides.push(newState.poses.some(poseCollides))
     const testUnit: Unit = { ...unit, ...newState, attitude: newState.attitude }
-    let score = evaluatePosition(testUnit, enemies, terrain, tableWidth, tableHeight)
-    if (newState.hitBoundary) {
-      score += BOUNDARY_PENALTY
-    }
+    let score = evaluatePosition(testUnit, enemies, terrain)
     if (terrain.length > 0) {
       const newDist = minEdgeDistance(newState.position, terrain)
       if (newDist > currentTerrainDist) {
@@ -512,14 +451,12 @@ export function suggestMovement(
     const dy = newState.position.y - unit.position.y
     const moveDist = Math.sqrt(dx * dx + dy * dy)
 
-    let nearestEnemyDir: { x: number; y: number } | null = null
     if (enemies.length > 0) {
       const nearestEnemy = enemies.reduce((a, b) =>
         distance(newState.position, a.position) < distance(newState.position, b.position) ? a : b,
       )
       const toEnemyX = nearestEnemy.position.x - unit.position.x
       const toEnemyY = nearestEnemy.position.y - unit.position.y
-      nearestEnemyDir = { x: toEnemyX, y: toEnemyY }
 
       if (moveDist > 0) {
         const toEnemyDist = Math.sqrt(toEnemyX * toEnemyX + toEnemyY * toEnemyY)
@@ -538,10 +475,6 @@ export function suggestMovement(
       }
     }
 
-    if (moveDist > 0 || plan.totalTurnPoints > 0) {
-      score += scoreHeadingTowardEdge(newState.position, newState.orientation, tableWidth, tableHeight, unit.aiStyle, nearestEnemyDir)
-    }
-
     const orientChange = Math.abs(((newState.orientation - unit.orientation) % 32 + 32) % 32)
     const orientCost = Math.min(orientChange, 32 - orientChange)
     score += moveDist * 0.5 + orientCost * 2
@@ -555,35 +488,6 @@ export function suggestMovement(
       unit.driftSpeed ?? 10,
       windDirection,
     )
-
-    if (
-      projectedPos.x < 0 || projectedPos.x > tableWidth ||
-      projectedPos.y < 0 || projectedPos.y > tableHeight
-    ) {
-      score += FUTURE_BOUNDARY_PENALTY
-    }
-
-    const projectedPos2 = projectNextPosition(
-      projectedPos,
-      newState.orientation,
-      newState.attitude,
-      newState.isInIrons,
-      unit.speedProfile,
-      unit.driftSpeed ?? 10,
-      windDirection,
-    )
-
-    if (
-      projectedPos2.x < 0 || projectedPos2.x > tableWidth ||
-      projectedPos2.y < 0 || projectedPos2.y > tableHeight
-    ) {
-      score += FUTURE_BOUNDARY_PENALTY * LOOKAHEAD_DISCOUNT
-    }
-
-    score += scoreEdgeProximity(projectedPos, tableWidth, tableHeight, unit.aiStyle) * LOOKAHEAD_DISCOUNT
-    score += scoreHeadingTowardEdge(projectedPos, newState.orientation, tableWidth, tableHeight, unit.aiStyle, nearestEnemyDir) * LOOKAHEAD_DISCOUNT
-
-    score += scoreEdgeProximity(projectedPos2, tableWidth, tableHeight, unit.aiStyle) * LOOKAHEAD_DISCOUNT * LOOKAHEAD_DISCOUNT
 
     if (enemies.length > 0) {
       const projectedEnemies = enemies.map((e) => {
@@ -610,7 +514,7 @@ export function suggestMovement(
         attitude: newState.attitude,
         isInIrons: newState.isInIrons,
       }
-      const futureScore = evaluatePosition(futureUnit, projectedEnemies, terrain, tableWidth, tableHeight)
+      const futureScore = evaluatePosition(futureUnit, projectedEnemies, terrain)
       score += futureScore * LOOKAHEAD_DISCOUNT
     }
 
@@ -642,8 +546,6 @@ export function decideAggressiveAction(
   plan: MovementPlan | null,
   allUnits: Unit[],
   windDirection: number,
-  tableWidth: number,
-  tableHeight: number,
 ): AIAction | null {
   if (unit.aiStyle !== 'aggressive') return null
   if (unit.status === 'destroyed' || unit.status === 'surrendered') return null
@@ -660,7 +562,7 @@ export function decideAggressiveAction(
   if (!plan) return null
 
   // Where the plan leaves us; grapple if a base lands within range of an enemy.
-  const final = applyMovementPlan(unit, plan, windDirection, tableWidth, tableHeight)
+  const final = applyMovementPlan(unit, plan, windDirection)
   const moved: Unit = { ...unit, position: final.position, orientation: final.orientation }
 
   let target: Unit | null = null

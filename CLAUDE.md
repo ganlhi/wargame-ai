@@ -2,24 +2,43 @@
 
 ## Overview
 
-This project is about creating an AI opponent for tabletop wargames. The user should be able to create games in which they define the size of the table, positions of units, some constraints about how units move and act. Then, at each turn they would indicate what actions they have taken with their own unit and ask the AI opponent what it wants to do with its own units. 
+This project is about creating an AI opponent for tabletop wargames. The user should be able to create games in which they define the terrain, positions of units, and some constraints about how units move and act. Then, at each turn they would indicate what actions they have taken with their own unit and ask the AI opponent what it wants to do with its own units. 
 
 The very first version, for simplicity reasons, will focus on naval wargames. This has several advantages:
 
 - the traversable terrain is flat
 - any piece of non-open terrain on the table is impassable for the units
 
+## The table is infinite
+
+The game table has **no edges and no fixed dimensions**. Ships may sail arbitrarily far in any direction; nothing is ever clamped, and the movement algorithm has no notion of a boundary. In practice this mirrors how these games are played: when the action drifts off one side of the physical table, everything is simply slid back across it.
+
+Because there is no fixed frame to measure from, **the first entity added to the game — unit or terrain piece — becomes the origin of all coordinates.** Its own position always reads (0, 0), *even after it moves*; every other unit and terrain piece is reported as an offset from it, in millimetres along the compass axes (e.g. `320mm E · 150mm S`). When the origin ship sails, every other reading shifts by the same amount in the opposite sense, which is exactly what a player measuring from that ship at the table would see.
+
+Each entity has a **placement reference point** — the point those offsets measure to and from:
+
+- **terrain**: the centre of the shape;
+- **units**: the middle of the rear (stern) edge of the base, which is where a ruler is held against a model. `Unit.position` stores the base *centre* internally, derived from the stern point; changing a ship's orientation therefore pivots it about its stern.
+
+Positions are stored in an arbitrary world frame (+x = East, +y = South) and converted to and from offsets for display and entry. Coordinates are freely negative.
+
+The origin can be re-pointed at any entity from the unit/terrain panel. It is only reassigned automatically when the origin entity is **deleted** — a destroyed or surrendered ship is still a model on the table, so it remains a perfectly good reference point.
+
 ## End-user usage
 
 - The user creates a game
-- They take a picture of the table with terrain on it, from above, and the picture is automatically undistoted to be a perfect rectangle
-- The software tries to automatically detect the terrain pieces and their contour, but let the user correct those, or add missing ones, or delete incorrect ones
-- The user can specify the wind direction
-- The user can specify the different units on the table: 
+- The user specifies the wind direction
+- The user describes the terrain pieces. Each is a simplified primitive rather than a traced outline:
+    - a shape: circle, ellipse or rectangle
+    - its size (diameter, or width E–W and length N–S)
+    - its rotation, for ellipses and rectangles
+    - the position of its **centre**, as an offset from the origin
+- The user can specify the different units on the table:
     - side (player or AI)
     - name
     - orientation
-    - position
+    - position of the **middle of the rear side of the base**, as an offset from the origin
+    - base footprint (width and length)
     - maximum firing range for each firing arc
     - if it's an AI unit, its initial "style": aggressive, cautious, defensive (this has an impact on movement decisions, see movement rules below)
 - The game can start
@@ -29,6 +48,7 @@ The very first version, for simplicity reasons, will focus on naval wargames. Th
     - mark a unit as destroyed or surrendered (in both cases cannot act at all anymore) or immobilised (can fire but not move)
     - ask the AI to suggest a movement for one of the AI units (see movement rules below)
     - change the "style" of an AI unit
+    - re-anchor the coordinate system onto a different unit or terrain piece
 
 ## Movement rules
 
@@ -66,8 +86,14 @@ A cautious unit will try to keep ennemies at a medium distance and shoot them wi
 
 ### Defensive
 
-A defensive unit will try to keep all ennemies at the longest range possible, and away from their broadsides (without leaving the table, though).
+A defensive unit will try to keep all ennemies at the longest range possible, and away from their broadsides.
+
+Since the table is infinite, there is no edge to stop a defensive unit sailing away for good. Instead it is held by a **disengagement leash**: beyond 1.5× the longest gun range either it or the nearest enemy brings to bear, extra distance buys nothing, and withdrawing further costs it. A defensive unit therefore opens the range to the edge of usefulness and holds station there; if it finds itself well outside the leash it works its way back in.
 
 ## Technologies
 
-This program should be web based, optimised for usage on a small tablet or a big smartphone, using the device's camera to capture the image of the table. It should store the state of ongoing games in local storage, not needing any server side storage or app code. It should be a full frontend app. 
+This program should be web based, optimised for usage on a small tablet or a big smartphone. It should store the state of ongoing games in local storage, not needing any server side storage or app code. It should be a full frontend app.
+
+All table information is entered by hand — there is no photo capture. With no table edges to align to and terrain reduced to primitives, a photograph has nothing left to anchor, so the setup flow is wind direction followed by typed terrain and unit descriptions.
+
+The battlefield view has no fixed extent to draw: it frames whatever is currently in play (ships, their bases, terrain, previewed movement paths and the origin), rescaling as the action spreads out or closes up. 

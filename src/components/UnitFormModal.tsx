@@ -4,6 +4,10 @@ import { useGameStore } from '../stores/gameStore'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
 import { ARC_SIDES, arcSideLabel } from '../types'
 import type { Unit, UnitSide, AIStyle, UnitStatus, ArcSide, Attitude, SpeedRange } from '../types'
+import { OffsetInput } from './OffsetInput'
+import {
+  centerFromSternMidpoint, fromOffset, originName, originPoint, sternMidpoint, toOffset,
+} from '../utils/coordinates'
 
 function OrientationSlider({
   initial,
@@ -58,17 +62,20 @@ function OrientationSlider({
 
 interface UnitFormModalProps {
   unit?: Unit
+  /**
+   * Reference point (middle of the base's rear edge) in world coordinates,
+   * pre-filled from a click on the battlefield.
+   */
   defaultPosition?: { x: number; y: number }
   onSave: (unit: Unit) => void
   onClose: () => void
 }
 
 export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFormModalProps) {
-  const windDirection = useGameStore((s) => s.currentGame?.windDirection ?? 0)
+  const currentGame = useGameStore((s) => s.currentGame)
+  const windDirection = currentGame?.windDirection ?? 0
   const [name, setName] = useState(unit?.name ?? '')
   const [side, setSide] = useState<UnitSide>(unit?.side ?? 'player')
-  const [posX, setPosX] = useState(unit?.position.x ?? defaultPosition?.x ?? 200)
-  const [posY, setPosY] = useState(unit?.position.y ?? defaultPosition?.y ?? 200)
   const [orientation, setOrientation] = useState(unit?.orientation ?? 0)
   const [status, setStatus] = useState<UnitStatus>(unit?.status ?? 'active')
   const [aiStyle, setAiStyle] = useState<AIStyle>(unit?.aiStyle ?? 'cautious')
@@ -99,16 +106,40 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
   const [baseLength, setBaseLength] = useState(unit?.baseLength ?? 80)
   const [speedProfile, setSpeedProfile] = useState<Record<Attitude, SpeedRange>>(unit?.speedProfile ?? defaultProfile)
 
+  const origin = currentGame ? originPoint(currentGame) : { x: 0, y: 0 }
+  const anchorName = currentGame ? originName(currentGame) : null
+  // The first entity on the table defines the origin, so it has nothing to be
+  // offset from; an existing origin unit keeps reading (0, 0) by definition.
+  const isFirstEntity = !currentGame?.originId
+  const isOrigin = !!unit && currentGame?.originId === unit.id
+
+  // A ship is placed by the middle of its base's rear edge — where a ruler is
+  // held against the model — so that, and not the base centre, is what the form
+  // edits. `Unit.position` (the centre) is derived from it on save, which means
+  // changing the orientation pivots the model about its stern.
+  const [offset, setOffset] = useState(() => {
+    if (unit) {
+      return toOffset(sternMidpoint(unit.position, unit.orientation, unit.baseLength), origin)
+    }
+    if (defaultPosition) return toOffset(defaultPosition, origin)
+    return { east: 0, south: 0 }
+  })
+
   const computedAttitude = computeAttitude(windDirection, orientation)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
+    const reference =
+      isFirstEntity || isOrigin
+        ? (unit ? sternMidpoint(unit.position, unit.orientation, unit.baseLength) : { x: 0, y: 0 })
+        : fromOffset(offset, origin)
+    const center = centerFromSternMidpoint(reference, orientation, baseLength)
     onSave({
       id: unit?.id ?? uuid(),
       name: name.trim(),
       side,
-      position: { x: posX, y: posY },
+      position: { x: Math.round(center.x), y: Math.round(center.y) },
       orientation,
       status,
       aiStyle: side === 'ai' ? aiStyle : 'cautious',
@@ -180,25 +211,22 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
             </div>
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Position X (mm)</label>
-              <input
-                type="number"
-                value={posX}
-                onChange={(e) => setPosX(Number(e.target.value))}
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Position Y (mm)</label>
-              <input
-                type="number"
-                value={posY}
-                onChange={(e) => setPosY(Number(e.target.value))}
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
+          <div className="border-t border-b border-gray-800 py-3">
+            {isFirstEntity || isOrigin ? (
+              <p className="text-xs text-gray-500">
+                {isOrigin
+                  ? 'This ship is the coordinate origin — it reads (0, 0) wherever it sails, and everything else is measured from the middle of its stern.'
+                  : 'This is the first thing on the table, so it becomes the coordinate origin. Everything placed afterwards is measured from the middle of its stern.'}
+              </p>
+            ) : (
+              <>
+                <p className="text-xs text-gray-400 mb-2">
+                  Middle of the stern, measured from{' '}
+                  <span className="text-gray-200">{anchorName ?? 'the origin'}</span>
+                </p>
+                <OffsetInput value={offset} onChange={setOffset} />
+              </>
+            )}
           </div>
 
           <OrientationSlider

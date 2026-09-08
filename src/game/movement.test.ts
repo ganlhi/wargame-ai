@@ -103,20 +103,24 @@ describe('orientationToVector', () => {
 describe('applyMovementPlan', () => {
   it('moves straight along the heading and reports distance travelled', () => {
     const unit = makeUnit({ position: { x: 100, y: 100 }, orientation: 8 })
-    const result = applyMovementPlan(unit, plan(straight(10)), 0, 1000, 1000)
+    const result = applyMovementPlan(unit, plan(straight(10)), 0)
     expect(result.position).toEqual({ x: 150, y: 100 })
     expect(result.orientation).toBe(8)
     expect(result.distanceTraveled).toBe(50)
-    expect(result.hitBoundary).toBe(false)
   })
 
-  it('clamps to the table edge and only counts distance actually travelled', () => {
+  it('runs off the old table bounds unhindered — the table is infinite', () => {
     const unit = makeUnit({ position: { x: 980, y: 100 }, orientation: 8 })
-    const result = applyMovementPlan(unit, plan(straight(10)), 0, 1000, 1000)
-    expect(result.position).toEqual({ x: 1000, y: 100 })
-    expect(result.hitBoundary).toBe(true)
-    // Only the first two chunks (980->990->1000) actually moved the ship.
-    expect(result.distanceTraveled).toBe(20)
+    const result = applyMovementPlan(unit, plan(straight(10)), 0)
+    expect(result.position).toEqual({ x: 1030, y: 100 })
+    expect(result.distanceTraveled).toBe(50)
+  })
+
+  it('allows negative coordinates west and north of the origin', () => {
+    const unit = makeUnit({ position: { x: 0, y: 0 }, orientation: 24 })
+    const result = applyMovementPlan(unit, plan(straight(10)), 8)
+    expect(result.position).toEqual({ x: -50, y: 0 })
+    expect(result.distanceTraveled).toBe(50)
   })
 
   it('applies a turn at the end of a chunk and continues on the new heading', () => {
@@ -126,7 +130,7 @@ describe('applyMovementPlan', () => {
       { distance: 10 }, { distance: 10 }, { distance: 10 }, { distance: 10 },
     ]
     // wind=16 keeps both headings clear of "in irons".
-    const result = applyMovementPlan(unit, plan(chunks, 8), 16, 1000, 1000)
+    const result = applyMovementPlan(unit, plan(chunks, 8), 16)
     expect(result.orientation).toBe(8)
     expect(result.position).toEqual({ x: 140, y: 90 })
     expect(result.distanceTraveled).toBe(50)
@@ -140,7 +144,7 @@ describe('applyMovementPlan', () => {
       driftSpeed: 50,
       maxTurnPoints: 0, // no rotation, so it stays in irons all 5 chunks
     })
-    const result = applyMovementPlan(unit, plan(straight(0)), 0, 1000, 1000)
+    const result = applyMovementPlan(unit, plan(straight(0)), 0)
     // Drift direction at wind=0 is +x; 50 total drift over the turn.
     expect(result.position).toEqual({ x: 550, y: 500 })
     expect(result.isInIrons).toBe(true)

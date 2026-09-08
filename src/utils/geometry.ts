@@ -1,4 +1,5 @@
 import { arcSideToAngles } from '../types'
+import type { TableTerrain } from '../types'
 
 export interface Point {
   x: number
@@ -140,4 +141,78 @@ export function polygonDistance(a: Point[], b: Point[]): number {
   vertexToEdges(a, b)
   vertexToEdges(b, a)
   return min
+}
+
+/** Number of segments used to approximate a curved terrain outline. */
+const TERRAIN_SEGMENTS = 24
+
+/**
+ * The outline of a terrain primitive as a polygon in world coordinates, so all
+ * the polygon maths (containment, distance, rendering) has a single code path
+ * regardless of whether the piece is a circle, an ellipse or a rectangle.
+ */
+export function terrainPolygon(t: TableTerrain): Point[] {
+  const { kind, width, height, rotation } = t.shape
+  const theta = (rotation * Math.PI) / 16
+  const cos = Math.cos(theta)
+  const sin = Math.sin(theta)
+  // +y is south, so a positive rotation turns the shape clockwise on screen,
+  // matching the clockwise 32-point compass used everywhere else.
+  const place = (u: number, v: number): Point => ({
+    x: t.center.x + u * cos - v * sin,
+    y: t.center.y + u * sin + v * cos,
+  })
+
+  if (kind === 'rectangle') {
+    const hw = width / 2
+    const hh = height / 2
+    return [place(-hw, -hh), place(hw, -hh), place(hw, hh), place(-hw, hh)]
+  }
+
+  const rx = width / 2
+  const ry = kind === 'circle' ? width / 2 : height / 2
+  const pts: Point[] = []
+  for (let i = 0; i < TERRAIN_SEGMENTS; i++) {
+    const a = (i / TERRAIN_SEGMENTS) * Math.PI * 2
+    pts.push(place(Math.cos(a) * rx, Math.sin(a) * ry))
+  }
+  return pts
+}
+
+/** Whether `p` lies inside a polygon (ray casting). */
+export function pointInPolygon(p: Point, poly: Point[]): boolean {
+  if (poly.length < 3) return false
+  let inside = false
+  for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+    const { x: xi, y: yi } = poly[i]
+    const { x: xj, y: yj } = poly[j]
+    if (yi > p.y !== yj > p.y && p.x < ((xj - xi) * (p.y - yi)) / (yj - yi) + xi) {
+      inside = !inside
+    }
+  }
+  return inside
+}
+
+/** Shortest distance from `p` to a polygon's outline (0 when p is on an edge). */
+export function pointPolygonEdgeDistance(p: Point, poly: Point[]): number {
+  let min = Infinity
+  for (let i = 0; i < poly.length; i++) {
+    const j = (i + 1) % poly.length
+    const d = pointSegmentDistance(p, poly[i], poly[j])
+    if (d < min) min = d
+  }
+  return min
+}
+
+/** Axis-aligned bounding box of a set of points. */
+export function boundsOf(points: Point[]): { minX: number; minY: number; maxX: number; maxY: number } | null {
+  if (points.length === 0) return null
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity
+  for (const p of points) {
+    if (p.x < minX) minX = p.x
+    if (p.x > maxX) maxX = p.x
+    if (p.y < minY) minY = p.y
+    if (p.y > maxY) maxY = p.y
+  }
+  return { minX, minY, maxX, maxY }
 }

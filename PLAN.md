@@ -1,6 +1,8 @@
 # Implementation Plan — Wargame AI
 
-> **Status as of 2026-06-16.** This plan has been reconciled with the code actually on `main`.
+> **Status as of 2026-09-08.** This plan has been reconciled with the code actually on `main`.
+>
+> **Phase 11 reshaped the model: the table is now infinite.** Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
 > Legend: `[x]` done · `[~]` partially done / deviates from original plan · `[ ]` not started.
 > Items marked `[~]` or `[ ]` are consolidated as actionable work in **Phase 10 — Remaining Work**.
 
@@ -13,7 +15,7 @@
 | State management | Zustand | ✅ Zustand 5 (`persist`) | Only `savedGames` + default dims are persisted via middleware; full game state is written to a per-game `game-${id}` localStorage key on explicit save |
 | Canvas / rendering | PixiJS v8 | ✅ PixiJS 8 | Main JS bundle ~560 kB — code-split later (9.4) |
 | Persistence | localStorage wrapper | ✅ localStorage | No auto-save yet (see 7.5) |
-| Camera / image | `getUserMedia` + canvas | ✅ `getUserMedia` + hand-rolled homography | `PhotoCapture.tsx` |
+| Camera / image | `getUserMedia` + canvas | ❌ Removed (Phase 11) | Nothing left for a photo to anchor once the table is unbounded and terrain is primitives |
 | Routing | React Router or none | ✅ None | `App.tsx` switches `currentGame ? GameView : MainMenu` |
 | Styling | Tailwind CSS | ✅ Tailwind v4 (`@tailwindcss/vite`) | |
 | Formatting / lint | ESLint + Prettier | ✅ ESLint (clean) + `.prettierrc` | |
@@ -45,16 +47,17 @@
   - `SpeedRange` is `{ max }` per attitude; the per-turn minimum is `prevMoveDistance/2` per the game rule (see 5.2 / 10.4), not a static per-attitude `min`.
   - `Unit` carries extra runtime fields not in the sketch: `driftSpeed`, `isInIrons`, `prevAttitude`, `prevMoveDistance`, `hiddenAIOrder`, `playerOrder`, `lastFireChunk`, `hiddenAIFirePlan`.
   - `WindDirection` is a plain `number` (0–31) on `GameState.windDirection`, not a named type.
+  - Phase 11: `TableTerrain` is `{ center, shape }` (a `TerrainShape` primitive) rather than a vertex list; `GameState` carries `originId` and no longer has `tableWidth`, `tableHeight` or `backgroundImage`.
 - [x] **2.2** Zustand store (`useGameStore`) — CRUD for units/terrain, wind get/set, turn management, `persist`
 
 ---
 
 ## Phase 3 — Table Setup & Terrain Editor
 
-- [x] **3.1** Table creation screen (`TableSetup.tsx`) — dimensions + compass wind picker
-- [x] **3.2** Photo capture flow (`PhotoCapture.tsx`) — `getUserMedia`, 4-corner drag, perspective **homography** undistortion, stored as data URL
-- [x] **3.3** Terrain polygon editor (`TerrainPanel.tsx` + canvas) — place/drag/delete vertices, type island/shoal/reef, terrain list
-- [x] **3.4** PixiJS table canvas (`GameCanvas.tsx`) — background photo, grid overlay, coloured terrain polygons
+- [x] **3.1** ~~Table creation screen (dimensions)~~ → **Game setup screen** (`GameSetup.tsx`) — compass wind picker only; there are no dimensions to set (Phase 11)
+- [x] **3.2** ~~Photo capture flow~~ — **removed in Phase 11** (`PhotoCapture.tsx` deleted)
+- [x] **3.3** ~~Terrain polygon editor~~ → **Terrain primitive editor** (`TerrainFormModal.tsx` + `TerrainPanel.tsx`) — circle/ellipse/rectangle with size, rotation and a centre entered as an offset; drag-to-reposition on canvas; type island/shoal/reef (Phase 11)
+- [x] **3.4** PixiJS canvas (`GameCanvas.tsx`) — content-fitting viewport, origin-anchored adaptive grid, coloured terrain primitives (Phase 11)
 
 ---
 
@@ -73,7 +76,7 @@
 - [x] **5.2** `getSpeedRangeForAttitude(...)` — _`SpeedRange` is `{ max }` per attitude; the minimum move each turn is `prevMoveDistance / 2`, which is the actual game rule (not a simplification — see 10.4)._
 - [x] **5.3** `computeEffectiveMaxSpeed(baseMaxSpeed, turnPoints)` — 5% penalty per turn point
 - [x] **5.4** `splitMovement(distance)` — 5 whole chunks, larger first
-- [x] **5.5** `applyMovementPlan(...)` — walks 5 chunks, per-chunk edge clamping, returns position/orientation/attitude/isInIrons/hitBoundary/**distanceTraveled**/path
+- [x] **5.5** `applyMovementPlan(...)` — walks 5 chunks and returns position/orientation/attitude/isInIrons/**distanceTraveled**/path/poses. _Phase 11 removed the table arguments, the per-chunk edge clamping and `hitBoundary`: positions are unbounded and may go negative._
 - [x] **5.6** Voluntary in-irons rule — drift downwind, keep turning until beating on the other tack (in `enumerateMovementPlans` + `applyMovementPlan`). _`driftSpeed` is the **total drift per turn**; per-chunk loops apply `driftSpeed / 5` and full-turn projections apply `driftSpeed`. This is applied consistently across resolution (`movement.ts`), fire simulation (`combat.ts`), the ghost-path preview (`GameCanvas.tsx`), and AI lookahead (`ai.ts`)._
 - [x] **5.7** `enumerateMovementPlans(...)` — brute-forces distances × 1–2 turns at any chunk boundary, plus in-irons / voluntary-in-irons plans
 
@@ -81,7 +84,7 @@
 
 ## Phase 6 — AI Decision System (`src/game/ai.ts`)
 
-- [x] **6.1** `evaluatePosition(...)` — distance-to-enemy, broadside/raking arcs, firing range, edge penalty, terrain proximity, enemy-broadside danger, **and attitude** (`scoreAttitude`, see 10.1).
+- [x] **6.1** `evaluatePosition(...)` — distance-to-enemy, broadside/raking arcs, firing range, **disengagement leash** (Phase 11, replacing the old edge penalty), terrain proximity, enemy-broadside danger, **and attitude** (`scoreAttitude`, see 10.1).
 - [x] **6.2** Style-specific scoring modifiers — aggressive / cautious / defensive (`scoreDistanceByStyle`, `scoreStyleSpecific`)
 - [x] **6.3** `suggestMovement(...)` — enumerate → simulate → score → select; includes a **2-ply lookahead** projecting own and enemy future positions
 - [~] **6.4** Difficulty / randomness — _`selectPlan()` fully supports a `difficulty` param (random ↔ noisy ↔ best), but it is hardcoded to `1` at both call sites and there is **no UI control**._
@@ -94,7 +97,7 @@
 - [x] **7.2** Main game screen (`GameView.tsx`) — top bar (turn / phase / wind), unit sidebar, Pixi canvas, selected-unit panel
 - [~] **7.3** Orders phase — _AI computes hidden orders; reveal shows ghost ships + order breakdown (`PlayerMovementPanel.tsx`); resolve applies simultaneously. Status changes (grapple/immobilise/destroy/surrender) are applied manually via the unit form rather than as an explicit pre-movement step._
 - [x] **7.4** AI turn flow — hidden orders computed on `startGame`/`resolveTurn`, previewed on reveal, applied on resolve
-- [~] **7.5** Game save / load — _manual save to localStorage works. **Missing: auto-save on change, JSON export/import, and `navigator.share()`.**_
+- [~] **7.5** Game save / load — _manual save to localStorage works, with `migrateSavedGame` normalising legacy formats (schema 5 drops table dimensions and the background photo, adds `originId`, and converts traced terrain polygons to bounding-rectangle primitives). **Missing: auto-save on change, JSON export/import, and `navigator.share()`.**_
 
 ---
 
@@ -147,6 +150,21 @@ Ordered roughly by value-to-effort. Each item references the phase it completes.
 
 ---
 
+## Phase 11 — Infinite Table
+
+A model change rather than a feature: the table has no edges and no fixed size, and coordinates are anchored to an entity instead of a table corner.
+
+- [x] **11.1 Unbounded movement (5.5).** `applyMovementPlan` lost its `tableWidth`/`tableHeight` arguments, the per-chunk clamping and `hitBoundary`. Positions are free to go negative or run arbitrarily far. `suggestMovement`, `evaluatePosition` and `decideAggressiveAction` lost the same arguments.
+- [x] **11.2 Origin-relative coordinates.** `GameState.originId` names the unit or terrain piece the coordinate system hangs off — set to the first entity added, re-pointable from the unit/terrain panels, and reassigned only when that entity is **deleted** (a destroyed or surrendered ship is still a model on the table). World coordinates stay in an arbitrary frame (+x = East, +y = South); `src/utils/coordinates.ts` converts to and from compass offsets for every readout and input. The origin entity reads `origin` (0, 0) however far it sails.
+- [x] **11.3 Placement reference points.** Terrain is placed by its centre; a unit by the **middle of its base's rear edge**, which is where a ruler meets a model. `Unit.position` still stores the base centre — every geometry routine (bases, arcs, collisions) is unchanged — with `sternMidpoint`/`centerFromSternMidpoint` converting at the form boundary, so changing a ship's orientation pivots it about its stern.
+- [x] **11.4 Disengagement leash (6.1).** `scoreEdgeProximity`, `scoreHeadingTowardEdge`, `BOUNDARY_PENALTY` and `FUTURE_BOUNDARY_PENALTY` are gone, replaced by `scoreDisengagementLeash`: beyond `1.5 ×` the longest gun range either the unit or its nearest enemy brings (floored at 400mm), further withdrawal costs `0.5` per mm. A defensive unit holds station at the edge of usefulness and works its way back in from outside it, which is what the table edge used to enforce. Covered by multi-turn convergence tests in `ai.test.ts`.
+- [x] **11.5 Terrain primitives (3.3).** `TableTerrain` is now `{ center, shape }` with `shape` one of circle / ellipse / rectangle plus size and a 32-point rotation, entered in `TerrainFormModal`. `terrainPolygon()` discretises a piece once (cached per object in `ai.ts`) so all the polygon maths — containment, edge distance, rendering — keeps a single code path. Vertex tracing and its whole canvas editing mode are gone.
+- [x] **11.6 Photo capture removed.** `PhotoCapture.tsx` and `GameState.backgroundImage` deleted: with no edges to align to and no outlines to trace, a photograph has nothing left to anchor. `TableSetup.tsx` → `GameSetup.tsx`, wind direction only.
+- [x] **11.7 Content-fitting viewport.** With no table rectangle to frame, `GameCanvas` computes its viewport from what is actually in play — ship bases, terrain outlines, previewed movement paths and the origin — with a minimum span so a lone ship isn't magnified absurdly. The grid is anchored on the origin and coarsens through 50 → 5000mm as the view zooms out, with a crosshair marking (0, 0).
+- [x] **11.8 Save migration (schema 5).** `migrateSavedGame` drops `tableWidth`/`tableHeight`/`backgroundImage`, adopts the first unit (else the first terrain piece) as `originId`, and converts each traced polygon to its bounding rectangle. World coordinates are left untouched, so nothing moves on the table — only the frame the readouts use changes.
+
+---
+
 ## Dependency Graph (Parallel Tracks)
 
 ```
@@ -166,6 +184,7 @@ Phase 0 (Scaffolding) ✅
 ```
 
 - **Track A** (UI-heavy): Phase 0 → 1 → 2 → 3 → 4 → 7  — _done; remaining polish in Phase 10._
+- **Track C** (model change): Phase 11 — _done; touches Phases 2, 3, 5, 6 and 7._
 - **Track B** (Logic-heavy): Phase 0 → 2 → 5 → 6 → 7  — _done._
 
 ---
@@ -175,7 +194,7 @@ Phase 0 (Scaffolding) ✅
 | # | Goal | Covers | Status |
 |---|------|--------|--------|
 | 1 — Main Menu | Menu lists saves; new/load/delete | 0.1–0.4, 1.1–1.3, 2.1 | ✅ |
-| 2 — Hello, Table | Dimensions, wind, terrain polygons on canvas | 3.1, 3.3, 3.4 | ✅ |
+| 2 — Hello, Table | Wind, terrain primitives on canvas | 3.1, 3.3, 3.4 | ✅ (reshaped by Phase 11) |
 | 3 — Units on the Board | Place units, orient, render as ships | 2.2, 4.1–4.3 | ✅ |
 | 4 — Moving Ships | AI suggests, previews, applies a valid move | 5.1–5.7, 6.1–6.3, 7.2–7.4 | ✅ |
 | 5 — Full Game Loop | Turns, status changes, save/load, all styles | 7.1, 7.5, 4.4, 6.4 | 🟡 export/import + auto-save (10.6), difficulty UI (10.5), grapple (10.2–10.3) |
