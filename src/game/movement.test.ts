@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  getInIronsTurnDirection,
   splitMovement,
   computeEffectiveMaxSpeed,
   orientationToVector,
@@ -28,6 +29,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     status: 'active',
     aiStyle: 'aggressive',
     maxTurnPoints: 6,
+    foreAndAftRigged: false,
     speedProfile: SPEED_PROFILE,
     driftSpeed: 10,
     baseWidth: 30,
@@ -226,7 +228,7 @@ describe('enumerateMovementPlans — minimum move', () => {
 
   it('holds a never-moved ship to at least half its maximum', () => {
     const unit = makeUnit({ orientation: 8, maxTurnPoints: 4, prevMoveDistance: null })
-    const max = unit.speedProfile[computeAttitude(0, 8)].max
+    const max = unit.speedProfile[computeAttitude(0, 8, unit.foreAndAftRigged)].max
     const plans = enumerateMovementPlans(unit, 0, null)
     const moving = plans.filter((p) => totalOf(p) > 0)
     expect(moving.length).toBeGreaterThan(0)
@@ -235,5 +237,31 @@ describe('enumerateMovementPlans — minimum move', () => {
     }
     // ...and it is no longer free to simply sit still.
     expect(plans.filter((p) => totalOf(p) === 0 && p.totalTurnPoints === 0)).toHaveLength(0)
+  })
+})
+
+describe('getInIronsTurnDirection', () => {
+  // The turn direction branches on whether the ship is beating, so its band
+  // boundary has to track computeAttitude's — otherwise a square-rigged ship at
+  // 5 points off the wind would be "in irons" to one and "beating" to the other.
+  it('treats a heading as beating exactly when computeAttitude does', () => {
+    for (const rig of [false, true]) {
+      for (let wind = 0; wind < 32; wind += 3) {
+        for (let orientation = 0; orientation < 32; orientation++) {
+          const attitude = computeAttitude(wind, orientation, rig)
+          if (attitude !== 'in_irons' && attitude !== 'beating') continue
+          const dir = getInIronsTurnDirection(orientation, wind, rig)
+          expect(dir === 'port' || dir === 'starboard').toBe(true)
+        }
+      }
+    }
+  })
+
+  it('swings a square rig the other way than a fore-and-aft rig at 5 points off', () => {
+    // Wind from N (0); orientation 5 is 5 points off, the one heading where the
+    // two rigs disagree, so they take opposite branches.
+    expect(computeAttitude(0, 5, false)).toBe('in_irons')
+    expect(computeAttitude(0, 5, true)).toBe('beating')
+    expect(getInIronsTurnDirection(5, 0, false)).not.toBe(getInIronsTurnDirection(5, 0, true))
   })
 })

@@ -13,16 +13,18 @@ import {
 function OrientationSlider({
   initial,
   windDir,
+  foreAndAftRigged,
   onChange,
 }: {
   initial: number
   windDir: number
+  foreAndAftRigged: boolean
   onChange: (v: number) => void
 }) {
   const [local, setLocal] = useState(initial)
   const committedRef = useRef(initial)
   const committed = committedRef.current
-  const attitude = computeAttitude(windDir, local)
+  const attitude = computeAttitude(windDir, local, foreAndAftRigged)
   const display = local
 
   return (
@@ -81,6 +83,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
   const [status, setStatus] = useState<UnitStatus>(unit?.status ?? 'active')
   const [aiStyle, setAiStyle] = useState<AIStyle>(unit?.aiStyle ?? 'cautious')
   const [maxTurnPoints, setMaxTurnPoints] = useState(unit?.maxTurnPoints ?? 6)
+  const [foreAndAftRigged, setForeAndAftRigged] = useState(unit?.foreAndAftRigged ?? false)
   const [arcRanges, setArcRanges] = useState<Record<ArcSide, number>>(() => {
     const result: Record<ArcSide, number> = { bow: 0, stern: 0, port: 0, starboard: 0 }
     for (const a of unit?.firingArcs ?? []) {
@@ -126,7 +129,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
     return { east: 0, south: 0 }
   })
 
-  const computedAttitude = computeAttitude(windDirection, orientation)
+  const computedAttitude = computeAttitude(windDirection, orientation, foreAndAftRigged)
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
@@ -145,6 +148,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       status,
       aiStyle: side === 'ai' ? aiStyle : 'cautious',
       maxTurnPoints,
+      foreAndAftRigged,
       speedProfile,
       driftSpeed,
       baseWidth,
@@ -233,9 +237,10 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
           </div>
 
           <OrientationSlider
-            key={unit?.id ?? 'new'}
+            key={`${unit?.id ?? 'new'}-${foreAndAftRigged}`}
             initial={orientation}
             windDir={windDirection}
+            foreAndAftRigged={foreAndAftRigged}
             onChange={(v) => setOrientation(v)}
           />
 
@@ -283,6 +288,31 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
               onChange={(e) => setMaxTurnPoints(Number(e.target.value))}
               className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs text-gray-400 mb-1.5">Rig</label>
+            <div className="flex gap-2">
+              {([false, true] as const).map((foreAft) => (
+                <button
+                  key={String(foreAft)}
+                  type="button"
+                  onClick={() => setForeAndAftRigged(foreAft)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                    foreAndAftRigged === foreAft
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-800 text-gray-400 border border-gray-700'
+                  }`}
+                >
+                  {foreAft ? 'Fore & Aft' : 'Square'}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">
+              {foreAndAftRigged
+                ? 'Points higher: in irons to 4 points off the wind, beating from 5.'
+                : 'In irons to 5 points off the wind, beating from 6.'}
+            </p>
           </div>
 
           <div className="grid grid-cols-2 gap-3">

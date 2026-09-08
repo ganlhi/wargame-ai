@@ -311,7 +311,7 @@ export const useGameStore = create<GameStore>()(
         const game = get().currentGame
         if (!game) return
         const units = game.units.map((u) => {
-          const attitude = computeAttitude(game.windDirection, u.orientation)
+          const attitude = computeAttitude(game.windDirection, u.orientation, u.foreAndAftRigged)
           return { ...u, attitude, prevAttitude: attitude }
         })
         set({

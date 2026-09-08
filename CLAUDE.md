@@ -38,6 +38,7 @@ The origin can be re-pointed at any entity from the unit/terrain panel. It is on
     - name
     - orientation
     - position of the **middle of the rear side of the base**, as an offset from the origin
+    - rig: square (the default) or fore & aft, which shifts the in-irons/beating boundary
     - base footprint (width and length)
     - maximum firing range for each firing arc
     - if it's an AI unit, its initial "style": aggressive, cautious, defensive (this has an impact on movement decisions, see movement rules below)
@@ -64,11 +65,16 @@ When deciding how many points the ship will turn, it's important to note that ea
 
 At the end of a movement phase, the new orientation of the ship, in relation to the wind, will dictate how fast it will be able to move next time. If we number the points in relation to the ship's bow from 0 (ship's bow) to 16 (ship's stern), symetrically left and right (so 90 degrees left and right are both numbered 8), we can qualify the following attitudes, depending from which direction the wind is blowing:
 
-- points 0 to 4: the ship is "in irons", meanin the wind comes from ahead
-- points 5 to 7: the ship is "beating"
+- points 0 to 5: the ship is "in irons", meanin the wind comes from ahead
+- points 6 to 7: the ship is "beating"
 - points 8 to 9: the ship is "reaching"
 - points 10 to 13: the ship is "quarter reaching"
 - points 14 to 16: the ship is "running"
+
+Exception: for ships flagged as "Fore & Aft Rigged", the first two ranges change as follows:
+
+- points 0 to 4: in irons
+- points 5 to 7: beating
 
 For most ships, the best to worst attitudes are as follows: quarter reaching, running, reaching, beating, in irons.
 

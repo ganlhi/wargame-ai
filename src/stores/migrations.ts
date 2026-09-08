@@ -9,8 +9,10 @@ import type { GameState, TableTerrain, TerrainShape } from '../types'
  *     `originId` added, and terrain moved from traced polygons to primitives.
  * 6 — `Unit.prevMoveDistance` is nullable; `null` means no movement phase has
  *     been resolved yet, which gives a half-of-maximum minimum move.
+ * 7 — `Unit.foreAndAftRigged` added. Square rig is the default for the age of
+ *     sail, and it is what the old single set of attitude bands described.
  */
-export const CURRENT_SCHEMA_VERSION = 6
+export const CURRENT_SCHEMA_VERSION = 7
 
 type RawRecord = Record<string, unknown>
 
@@ -88,6 +90,7 @@ export function migrateSavedGame(raw: RawRecord): GameState {
     hiddenAIOrder: u.hiddenAIOrder ?? null,
     playerOrder: u.playerOrder ?? null,
     driftSpeed: u.driftSpeed ?? 10,
+    foreAndAftRigged: u.foreAndAftRigged ?? false,
     baseWidth: u.baseWidth ?? 30,
     baseLength: u.baseLength ?? 80,
     grappledWith: u.grappledWith ?? null,

@@ -30,6 +30,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     status: 'active',
     aiStyle: 'aggressive',
     maxTurnPoints: 6,
+    foreAndAftRigged: false,
     speedProfile: SPEED_PROFILE,
     driftSpeed: 10,
     baseWidth: 30,

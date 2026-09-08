@@ -9,6 +9,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     id: 'u1', name: 'Test', side: 'player',
     position: { x: 0, y: 0 }, orientation: 0, status: 'active', aiStyle: 'cautious',
     maxTurnPoints: 6,
+    foreAndAftRigged: false,
     speedProfile: {
       in_irons: { max: 0 }, beating: { max: 60 }, reaching: { max: 80 },
       quarter_reaching: { max: 100 }, running: { max: 90 },

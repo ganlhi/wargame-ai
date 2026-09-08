@@ -1,5 +1,5 @@
 import type { Attitude, Unit, MovementPlan, MoveChunk, SpeedRange } from '../types'
-import { computeAttitude, windTowardPoint } from '../utils/attitude'
+import { computeAttitude, inIronsLimit, windTowardPoint } from '../utils/attitude'
 
 export const MOVEMENT_STEP = 5
 
@@ -54,17 +54,28 @@ export function driftVector(windDirection: number): { dx: number; dy: number } {
   return orientationToVector(windTowardPoint(windDirection))
 }
 
-function getInIronsTurnDirection(orientation: number, windDirection: number): 'port' | 'starboard' {
+/**
+ * Which way a ship swings while it is in irons. The band boundary depends on
+ * the rig, so this has to agree with `computeAttitude` — a square rig is still
+ * in irons at 5 points off the wind where a fore-and-aft rig is already beating.
+ *
+ * `rel` is the bearing of the wind's source from the bow, 0–31 clockwise, so
+ * `rel <= 16` means the wind is off the starboard bow.
+ */
+export function getInIronsTurnDirection(
+  orientation: number,
+  windDirection: number,
+  foreAndAftRigged: boolean,
+): 'port' | 'starboard' {
   const rel = ((windDirection - orientation) % 32 + 32) % 32
   const norm = rel > 16 ? 32 - rel : rel
+  const limit = inIronsLimit(foreAndAftRigged)
 
-  if (norm >= 5 && norm <= 7) {
-    if (rel <= 16) return 'starboard'
-    return 'port'
+  if (norm > limit && norm <= 7) {
+    return rel <= 16 ? 'starboard' : 'port'
   }
 
-  if (rel <= 4) return 'port'
-  return 'starboard'
+  return rel <= limit ? 'port' : 'starboard'
 }
 
 function buildPlan(
@@ -132,13 +143,13 @@ export function applyMovementPlan(
     poses.push({ x, y, orientation })
 
     if (isInIrons) {
-      const dir = getInIronsTurnDirection(orientation, windAngle)
+      const dir = getInIronsTurnDirection(orientation, windAngle, unit.foreAndAftRigged)
       const pts = Math.ceil(unit.maxTurnPoints / 2)
       orientation = dir === 'port'
         ? (orientation - pts + 32) % 32
         : (orientation + pts) % 32
 
-      const newAtt = computeAttitude(windAngle, orientation)
+      const newAtt = computeAttitude(windAngle, orientation, unit.foreAndAftRigged)
       if (newAtt === 'beating') {
         isInIrons = false
       }
@@ -148,7 +159,7 @@ export function applyMovementPlan(
     }
   }
 
-  const attitude = computeAttitude(windAngle, orientation)
+  const attitude = computeAttitude(windAngle, orientation, unit.foreAndAftRigged)
 
   if (!isInIrons && attitude === 'in_irons' && !unit.isInIrons) {
     isInIrons = true
@@ -174,17 +185,17 @@ export function enumerateMovementPlans(
   const { maxTurnPoints, speedProfile } = unit
 
   if (unit.isInIrons) {
-    const dir = getInIronsTurnDirection(unit.orientation, windAngle)
+    const dir = getInIronsTurnDirection(unit.orientation, windAngle, unit.foreAndAftRigged)
     const turn1 = Math.ceil(maxTurnPoints / 2)
     const turn2 = maxTurnPoints - turn1
     const turns: { afterChunk: number; direction: 'port' | 'starboard'; points: number }[] = []
     if (turn1 > 0) turns.push({ afterChunk: 1, direction: dir, points: turn1 })
     if (turn2 > 0) turns.push({ afterChunk: 3, direction: dir, points: turn2 })
-    plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, speedProfile[computeAttitude(windAngle, unit.orientation)].max))
+    plans.push(buildPlan([0, 0, 0, 0, 0], turns, maxTurnPoints, speedProfile[computeAttitude(windAngle, unit.orientation, unit.foreAndAftRigged)].max))
     return plans
   }
 
-  const range = getSpeedRangeForAttitude(computeAttitude(windAngle, unit.orientation), speedProfile)
+  const range = getSpeedRangeForAttitude(computeAttitude(windAngle, unit.orientation, unit.foreAndAftRigged), speedProfile)
 
   const effectiveMinDist = minMoveDistance(unit.prevMoveDistance, range.max)
   const startDist = Math.ceil(effectiveMinDist / MOVEMENT_STEP) * MOVEMENT_STEP
@@ -238,7 +249,7 @@ export function enumerateMovementPlans(
   }
 
   if (!unit.isInIrons) {
-    const dir = getInIronsTurnDirection(unit.orientation, windAngle)
+    const dir = getInIronsTurnDirection(unit.orientation, windAngle, unit.foreAndAftRigged)
     const turn1 = Math.ceil(maxTurnPoints / 2)
     const turn2 = maxTurnPoints - turn1
     const turns: { afterChunk: number; direction: 'port' | 'starboard'; points: number }[] = []
@@ -248,7 +259,7 @@ export function enumerateMovementPlans(
   }
 
   if (prevAttitude === 'beating' && !unit.isInIrons) {
-    const dir = getInIronsTurnDirection(unit.orientation, windAngle)
+    const dir = getInIronsTurnDirection(unit.orientation, windAngle, unit.foreAndAftRigged)
     const oppDir = dir === 'port' ? 'starboard' : 'port'
     const turn1 = Math.ceil(maxTurnPoints / 2)
     const turn2 = maxTurnPoints - turn1

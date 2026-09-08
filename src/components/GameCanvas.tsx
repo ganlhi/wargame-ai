@@ -932,7 +932,7 @@ export function GameCanvas({
               : `Stern: ${formatOffset(toOffset(unitReferencePoint(selectedUnit), origin))}`}
           </div>
           <div className="text-xs text-gray-500 mb-3">
-            Orientation: {COMPASS_LABELS[selectedUnit.orientation]} &middot; Attitude: {currentGame ? ATTITUDE_LABELS[computeAttitude(currentGame.windDirection, selectedUnit.orientation)] : ''}
+            Orientation: {COMPASS_LABELS[selectedUnit.orientation]} &middot; Attitude: {currentGame ? ATTITUDE_LABELS[computeAttitude(currentGame.windDirection, selectedUnit.orientation, selectedUnit.foreAndAftRigged)] : ''}
           </div>
 
           {(() => {

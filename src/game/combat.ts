@@ -11,7 +11,7 @@ export interface FiringResult {
   weapons: number
 }
 
-import { orientationToVector, driftVector } from './movement'
+import { orientationToVector, driftVector, getInIronsTurnDirection } from './movement'
 import { computeAttitude } from '../utils/attitude'
 
 export function checkFiringArc(firer: Unit, target: Unit): FiringResult {
@@ -45,6 +45,7 @@ function simulateChunk(
   windDirection: number,
   driftSpeed: number,
   maxTurnPoints: number,
+  foreAndAftRigged: boolean,
 ): { position: { x: number; y: number }; orientation: number; isInIrons: boolean } {
   let { x, y } = pos
   let orient = orientation
@@ -63,16 +64,15 @@ function simulateChunk(
   }
 
   if (irons) {
-    const rel = ((windDirection - orient) % 32 + 32) % 32
-    const norm = rel > 16 ? 32 - rel : rel
-    const dir = norm >= 5 && norm <= 7
-      ? (rel <= 16 ? 'starboard' : 'port')
-      : (rel <= 4 ? 'port' : 'starboard')
+    // Shared with movement resolution rather than re-derived here: the two used
+    // to hold separate copies of this, which the rig-dependent band boundary
+    // would have silently pulled apart.
+    const dir = getInIronsTurnDirection(orient, windDirection, foreAndAftRigged)
     const pts = Math.ceil(maxTurnPoints / 2)
     orient = dir === 'port'
       ? (orient - pts + 32) % 32
       : (orient + pts) % 32
-    const newAtt = computeAttitude(windDirection, orient)
+    const newAtt = computeAttitude(windDirection, orient, foreAndAftRigged)
     if (newAtt === 'beating') irons = false
   } else if (chunk.turn) {
     const dir = chunk.turn.direction === 'port' ? -1 : 1
@@ -113,7 +113,7 @@ export function computeAIFirePlan(
 
   for (let ci = 0; ci < aiPlan.chunks.length; ci++) {
     const chunk = aiPlan.chunks[ci]
-    const result = simulateChunk(aiPos, aiOrient, aiIrons, chunk, windDirection, aiUnit.driftSpeed, aiUnit.maxTurnPoints)
+    const result = simulateChunk(aiPos, aiOrient, aiIrons, chunk, windDirection, aiUnit.driftSpeed, aiUnit.maxTurnPoints, aiUnit.foreAndAftRigged)
     aiPos = result.position
     aiOrient = result.orientation
     aiIrons = result.isInIrons
@@ -136,7 +136,7 @@ export function computeAIFirePlan(
         puIrons = pu.isInIrons
         for (let pci = 0; pci <= ci; pci++) {
           const pc = puPlan.chunks[pci]
-          const puResult = simulateChunk(puPos, puOrient, puIrons, pc, windDirection, pu.driftSpeed, pu.maxTurnPoints)
+          const puResult = simulateChunk(puPos, puOrient, puIrons, pc, windDirection, pu.driftSpeed, pu.maxTurnPoints, pu.foreAndAftRigged)
           puPos = puResult.position
           puOrient = puResult.orientation
           puIrons = puResult.isInIrons

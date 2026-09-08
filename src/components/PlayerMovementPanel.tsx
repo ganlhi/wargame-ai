@@ -20,7 +20,7 @@ export function PlayerMovementPanel({ unit }: Props) {
   const windDirection = useGameStore((s) => s.currentGame?.windDirection ?? 0)
   const currentPhase = useGameStore((s) => s.currentGame?.currentPhase)
   const isEditable = currentPhase === 'orders'
-  const attitude = computeAttitude(windDirection, unit.orientation)
+  const attitude = computeAttitude(windDirection, unit.orientation, unit.foreAndAftRigged)
 
   const [expanded, setExpanded] = useState(false)
 

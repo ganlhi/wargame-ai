@@ -2,7 +2,7 @@
 
 > **Status as of 2026-09-08.** This plan has been reconciled with the code actually on `main`.
 >
-> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, and **Phase 13** replaced native dropdowns with an anchored control that works on mobile. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
+> **Phase 11 reshaped the model: the table is now infinite**, **Phase 12** added movement-range feedback, map pan/zoom and a wind-drift fix, **Phase 13** replaced native dropdowns with an anchored control that works on mobile, and **Phase 14** corrected the attitude bands and added rig types. Table dimensions, edge clamping, edge-based AI scoring and the photo-capture flow are all gone; coordinates are relative to an origin entity and terrain is described with primitives. Items below that describe the old bounded table are marked accordingly.
 > Legend: `[x]` done · `[~]` partially done / deviates from original plan · `[ ]` not started.
 > Items marked `[~]` or `[ ]` are consolidated as actionable work in **Phase 10 — Remaining Work**.
 
@@ -72,7 +72,7 @@
 
 ## Phase 5 — Core Movement Logic (`src/game/movement.ts`, `src/utils/attitude.ts`)
 
-- [x] **5.1** `computeAttitude(windDirection, orientation)` — modulo wrap-around, points-from-bow mapping
+- [x] **5.1** `computeAttitude(windDirection, orientation, foreAndAftRigged)` — modulo wrap-around, points-from-bow mapping, rig-dependent in-irons boundary (Phase 14)
 - [x] **5.2** `getSpeedRangeForAttitude(...)` / `minMoveDistance(...)` — _`SpeedRange` is `{ max }` per attitude; the minimum move each turn is `prevMoveDistance / 2`, which is the actual game rule (not a simplification — see 10.4). `prevMoveDistance` is `null` until a ship has had a movement phase, in which case the minimum is half the **maximum** instead (Phase 12)._
 - [x] **5.3** `computeEffectiveMaxSpeed(baseMaxSpeed, turnPoints)` — 5% penalty per turn point
 - [x] **5.4** `splitMovement(distance)` — 5 whole chunks, larger first
@@ -180,6 +180,16 @@ A model change rather than a feature: the table has no edges and no fixed size, 
 - [x] **13.1 Custom `Select` (9.1).** On mobile, a native `<select>` hands its popup to the OS: a bottom sheet on iOS, a centred dialog on Android, and — inside a `transform`ed ancestor (the terrain context menu) or an `overflow` scroll container (the side rail, both modals) — sometimes anchored nowhere near the control. `src/components/Select.tsx` renders its list into a `document.body` portal positioned from the trigger's `getBoundingClientRect()`, which already accounts for ancestor transforms and cannot be clipped by an ancestor's overflow. It flips above the trigger when room below is short, follows the trigger through scroll and resize (capture-phase listener, so inner panels count), closes on outside press or Escape, and supports arrow/Home/End/Enter/Escape with `listbox`/`option` roles. All seven native selects are replaced.
 - [x] **13.2 Positioning extracted (code health).** `computeDropdownPosition` lives in `src/utils/dropdownPosition.ts` taking the viewport size as a parameter, so flipping, height capping and horizontal clamping are unit-tested without a DOM.
 - [x] **13.3 Terrain styles extracted.** `TERRAIN_COLORS` / `TERRAIN_TYPES` / `TERRAIN_TYPE_OPTIONS` moved from `TerrainPanel.tsx` to `src/utils/terrainStyles.ts`; three components were importing constants from a component module.
+
+---
+
+## Phase 14 — Corrected Attitude Bands & Rig Types
+
+CLAUDE.md's attitude bands were corrected: a square rig is in irons out to **5** points off the wind and only beats from 6, where the old single band had it beating from 5. Fore-and-aft rigged ships keep the old, higher-pointing boundary.
+
+- [x] **14.1 Rig-dependent bands (5.1).** `computeAttitude(wind, orientation, foreAndAftRigged)` now takes the rig; `inIronsLimit()` and `pointsOffWind()` are split out so the boundary lives in one place. The parameter is **required**, not defaulted, so the compiler flagged all thirteen call sites rather than letting any silently keep the old bands. This also resolves the attitude report from Phase 12: a square-rigged ship heading NWbN with the wind blowing toward E is 5 points off, and is now correctly in irons.
+- [x] **14.2 `Unit.foreAndAftRigged` (2.1 / 4.1).** New boolean, edited as a Square / Fore & Aft toggle in `UnitFormModal` (with the resulting boundary spelled out under it), defaulted to square by `migrateSavedGame` at `schemaVersion` 7 — square rig is both the age-of-sail default and what the old single set of bands described.
+- [x] **14.3 In-irons swing follows the same boundary.** `getInIronsTurnDirection` branched on a hardcoded 5–7 beating band, and `combat.ts` held a second inlined copy of it. Both now use the shared rig-aware helper exported from `movement.ts`, with a test asserting the two agree with `computeAttitude` across every wind/heading/rig combination — the duplicate would otherwise have diverged the moment the boundary moved.
 
 ---
 

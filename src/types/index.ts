@@ -117,6 +117,12 @@ export interface Unit {
   status: UnitStatus
   aiStyle: AIStyle
   maxTurnPoints: number
+  /**
+   * Fore-and-aft rigged ships point one point closer to the wind: they are in
+   * irons only to 4 points off it, and beating from 5, where a square rig is
+   * still in irons at 5 and only starts beating at 6.
+   */
+  foreAndAftRigged: boolean
   speedProfile: Record<Attitude, SpeedRange>
   driftSpeed: number
   // Footprint of the physical base the model is mounted on, in mm. `baseLength`
