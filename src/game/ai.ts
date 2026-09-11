@@ -1,8 +1,8 @@
-import type { Unit, MovementPlan, TableTerrain, Attitude, SpeedRange, AIAction } from '../types'
-import { arcSideToAngles } from '../types'
+import type { Unit, MovementPlan, TableTerrain, Attitude, AIAction, RangeBand } from '../types'
+import { arcSideToAngles, arcMaxRange, arcEffectiveGuns, RANGE_BANDS } from '../types'
 import {
   enumerateMovementPlans, applyMovementPlan, orientationToVector, driftVector,
-  projectTackCompletion,
+  projectTackCompletion, topSpeed,
 } from './movement'
 import { computeAIFirePlan } from './combat'
 import type { Point } from '../utils/geometry'
@@ -66,15 +66,50 @@ const TACK_STYLE_MULT: Record<string, number> = {
 }
 
 function maxFiringRange(unit: Unit): number {
-  return Math.max(...unit.firingArcs.map((a) => a.maxRange), 0)
+  return unit.firingArcs.reduce((max, a) => Math.max(max, arcMaxRange(a)), 0)
 }
 
-function getRangeTiers(enemy: Unit): { close: number; medium: number; long: number; extreme: number } {
-  const extreme = maxFiringRange(enemy)
-  const long = extreme * 0.6
-  const medium = long * 0.6
-  const close = medium * 0.6
-  return { close, medium, long, extreme }
+type RangeTiers = Record<RangeBand, number>
+
+/**
+ * The outer edge of each band across everything a ship carries — her longest
+ * close range, her longest medium range, and so on. null when she has no guns
+ * entered at all, which is the normal case for a player ship: only the AI needs
+ * a gun layout, so the player's is left blank.
+ */
+function ownRangeTiers(unit: Unit): RangeTiers | null {
+  const tiers: RangeTiers = { close: 0, medium: 0, long: 0, extreme: 0 }
+  let any = false
+  for (const arc of unit.firingArcs) {
+    for (const profile of arc.guns) {
+      if (profile.guns <= 0) continue
+      any = true
+      for (const band of RANGE_BANDS) {
+        tiers[band] = Math.max(tiers[band], profile.ranges[band])
+      }
+    }
+  }
+  return any ? tiers : null
+}
+
+// Neither ship has a gun entered: fall back to bands scaled off the same
+// nominal reach the disengagement leash uses, so the style logic still has
+// meaningful distances to work with.
+const DEFAULT_RANGE_TIERS: RangeTiers = {
+  close: LEASH_FALLBACK_RANGE * 0.2,
+  medium: LEASH_FALLBACK_RANGE * 0.4,
+  long: LEASH_FALLBACK_RANGE * 0.7,
+  extreme: LEASH_FALLBACK_RANGE,
+}
+
+/**
+ * The bands the AI judges its distance from `enemy` by. Preferably the enemy's
+ * own reach — how far away is far enough to be safe is a question about their
+ * guns. Player ships carry no gun layout, so it falls back to the AI's own
+ * bands, which are at least the right order of magnitude for the engagement.
+ */
+function getRangeTiers(enemy: Unit, self: Unit): RangeTiers {
+  return ownRangeTiers(enemy) ?? ownRangeTiers(self) ?? DEFAULT_RANGE_TIERS
 }
 
 function getEngageableWeapons(
@@ -93,11 +128,14 @@ function getEngageableWeapons(
   let isRaking = false
 
   for (const arc of firer.firingArcs) {
-    if (dist > arc.maxRange) continue
+    // Guns count for what they would actually land at this range rather than
+    // by the barrel: a broadside at extreme range is worth a fourteenth of the
+    // same broadside at close quarters, which is what makes closing worth doing.
+    const weapons = arcEffectiveGuns(arc, dist)
+    if (weapons <= 0) continue
     const a = arcSideToAngles(arc.side)
     if (!inArc(relAngle, a.minAngle, a.maxAngle)) continue
 
-    const weapons = arc.weapons || 1
     totalWeapons += weapons
     if (arc.side === 'port' || arc.side === 'starboard') {
       broadsideWeapons += weapons
@@ -211,7 +249,7 @@ function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
 
   for (const e of enemies) {
     const dist = distance(unit.position, e.position)
-    const { close, medium, long } = getRangeTiers(e)
+    const { close, medium, long } = getRangeTiers(e, unit)
 
     switch (unit.aiStyle) {
       case 'aggressive': {
@@ -283,7 +321,7 @@ function scoreEnemyBroadsideDanger(unit: Unit, enemies: Unit[]): number {
   for (const e of enemies) {
     if (isEnemyBroadsideOnUnit(unit, e)) {
       const dist = distance(unit.position, e.position)
-      const { medium, long } = getRangeTiers(e)
+      const { medium, long } = getRangeTiers(e, unit)
       if (dist < medium) {
         penalty -= 20
       } else if (dist < long) {
@@ -301,7 +339,7 @@ function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
 
   for (const e of enemies) {
     const dist = distance(unit.position, e.position)
-    const { close, medium, long } = getRangeTiers(e)
+    const { close, medium, long } = getRangeTiers(e, unit)
     const weapons = getEngageableWeapons(unit, h, e)
 
     switch (unit.aiStyle) {
@@ -356,7 +394,7 @@ export function scoreTack(
 
   const finished: Unit = { ...unit, position: outcome.position, orientation: outcome.orientation }
   const heading = headingDeg(outcome.orientation)
-  const { close, medium } = getRangeTiers(finished)
+  const { close, medium } = getRangeTiers(finished, finished)
 
   let best = 0
   for (const enemy of enemies) {
@@ -365,10 +403,7 @@ export function scoreTack(
     // already makes, just repeated.
     let position = enemy.position
     for (let turn = 0; turn < outcome.turns; turn++) {
-      position = projectNextPosition(
-        position, enemy.orientation, enemy.attitude, enemy.isInIrons,
-        enemy.speedProfile, enemy.driftSpeed ?? 10, windDirection,
-      )
+      position = projectNextPosition(enemy, { ...enemy, position }, windDirection)
     }
     const projected: Unit = { ...enemy, position }
 
@@ -405,8 +440,7 @@ function scoreFiringOpportunity(
   const firePlan = computeAIFirePlan({ ...unit, hiddenAIOrder: plan }, allUnits, windDirection)
   if (!firePlan) return 0
 
-  const arc = unit.firingArcs.find((a) => a.side === firePlan.arcSide)
-  return (arc?.weapons || 1) * FIRE_SOLUTION_PER_GUN
+  return firePlan.effectiveGuns * FIRE_SOLUTION_PER_GUN
 }
 
 export function evaluatePosition(
@@ -454,29 +488,32 @@ function selectPlan(
   return plans[noisy.indexOf(bestNoisy)]
 }
 
+/**
+ * Where `unit` would be a turn from now if she carried on as she is: half her
+ * top speed for the point of sail — the ship's own multiplier included — or,
+ * head to wind, a turn's worth of drift to leeward. A guess, but the same guess
+ * the AI makes about every ship, itself included.
+ */
 function projectNextPosition(
-  pos: { x: number; y: number },
-  orientation: number,
-  attitude: Attitude,
-  isInIrons: boolean,
-  speedProfile: Record<Attitude, SpeedRange>,
-  driftSpeed: number,
+  unit: Unit,
+  pose: { position: Point; orientation: number; attitude: Attitude; isInIrons: boolean },
   windAngle: number,
-): { x: number; y: number } {
+): Point {
+  const { position, orientation, attitude, isInIrons } = pose
   if (isInIrons) {
     const drift = driftVector(windAngle)
     // driftSpeed is the total drift for a whole turn; this projects one turn ahead.
+    const driftSpeed = unit.driftSpeed ?? 10
     return {
-      x: pos.x + drift.dx * driftSpeed,
-      y: pos.y + drift.dy * driftSpeed,
+      x: position.x + drift.dx * driftSpeed,
+      y: position.y + drift.dy * driftSpeed,
     }
   }
-  const range = speedProfile[attitude]
-  const midSpeed = Math.round(range.max / 2)
+  const midSpeed = Math.round(topSpeed(unit, attitude) / 2)
   const vec = orientationToVector(orientation)
   return {
-    x: pos.x + vec.dx * midSpeed,
-    y: pos.y + vec.dy * midSpeed,
+    x: position.x + vec.dx * midSpeed,
+    y: position.y + vec.dy * midSpeed,
   }
 }
 
@@ -589,32 +626,13 @@ export function suggestMovement(
     // happens to bear once the turn is over.
     score += scoreFiringOpportunity(unit, plan, allUnits, windDirection)
 
-    const projectedPos = projectNextPosition(
-      newState.position,
-      newState.orientation,
-      newState.attitude,
-      newState.isInIrons,
-      unit.speedProfile,
-      unit.driftSpeed ?? 10,
-      windDirection,
-    )
+    const projectedPos = projectNextPosition(unit, newState, windDirection)
 
     if (enemies.length > 0) {
-      const projectedEnemies = enemies.map((e) => {
-        const eRange = e.speedProfile[e.attitude]
-        const eSpeed = Math.round(eRange.max / 2)
-        const eVec = orientationToVector(e.orientation)
-        let ePos = { x: e.position.x + eVec.dx * eSpeed, y: e.position.y + eVec.dy * eSpeed }
-        if (e.isInIrons) {
-          const drift = driftVector(windDirection)
-          // driftSpeed is the total drift for a whole turn; this projects one turn ahead.
-          ePos = {
-            x: e.position.x + drift.dx * (e.driftSpeed ?? 10),
-            y: e.position.y + drift.dy * (e.driftSpeed ?? 10),
-          }
-        }
-        return { ...e, position: ePos }
-      })
+      const projectedEnemies = enemies.map((e) => ({
+        ...e,
+        position: projectNextPosition(e, e, windDirection),
+      }))
 
       const futureUnit: Unit = {
         ...unit,

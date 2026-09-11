@@ -40,8 +40,11 @@ The origin can be re-pointed at any entity from the unit/terrain panel. It is on
     - position of the **middle of the rear side of the base**, as an offset from the origin
     - rig: square (the default) or fore & aft, which shifts the in-irons/beating boundary
     - base footprint (width and length)
-    - maximum firing range for each firing arc
-    - if it's an AI unit, its initial "style": aggressive, cautious, defensive (this has an impact on movement decisions, see movement rules below)
+    - top speed on each point of sail, best to worst — quarter reaching, running, reaching, beating. In irons is not among them: head to wind a ship carries no way of her own and drifts instead, at her drift speed.
+    - a speed multiplier scaling every one of those figures, so one number makes a ship faster or slower overall. It is **entered as a whole percentage** — 100% by default, less for a ship shortened down, more for one under full sail — and applied as the decimal it stands for, so 90% multiplies her speeds by 0.9. Percentages are typed rather than decimals because a field that reparses every keystroke cannot hold a half-typed decimal: `0.` is not yet a number, so it lands as 0 and the digits after the point never arrive.
+    - if it's an AI unit, its gun layout (see firing below) and its initial "style": aggressive, cautious, defensive (this has an impact on movement decisions, see movement rules below)
+
+Only AI ships carry a gun layout. The player rolls their own fire at the table, so entering one for a player ship would be data nobody reads; where the AI needs to judge how dangerous a player ship is, it falls back on its own ranges.
 - The game can start
 - During the game, the user can:
     - update position and orientation of any unit
@@ -54,6 +57,8 @@ The origin can be re-pointed at any entity from the unit/terrain panel. It is on
 ## Movement rules
 
 Units have a maximum and minimum movement range. Between these boundaries, they can move any distance, knowing that the next turn's min distance will be half of what they have moved this time. On a ship's very first turn there is no previous move to halve, so its minimum is **half of its maximum**.
+
+A ship's maximum for a point of sail is the figure entered for it scaled by her speed multiplier, so that one decimal moves both ends of the range at once — a ship under full sail must commit to more way, not just be allowed more.
 
 The minimum is measured against the ship's base maximum for its point of sail, so it is a fixed number for the turn. The maximum, by contrast, drops 5% per turn point spent (see below) — so a plan with more than 10 turn points pushes the ceiling below the floor, which simply means that plan is not legal.
 
@@ -94,7 +99,19 @@ The player declares a tack with a single button, which fills in the whole moveme
 
 ## Firing and reloading
 
-A ship fires one arc per turn, at the earliest chunk of its movement where the arc bears on a target in range. Because the shot is taken *during* the move rather than at the end of it, an AI weighs each candidate move by the shot it would actually produce — otherwise it can manoeuvre itself out of its own firing solution, turning a bearing broadside away from a target at point-blank range.
+### Guns and range bands
+
+An arc's armament is a list of **gun profiles** rather than a single range and gun count — a broadside is rarely uniform, with long guns on the gun deck and carronades above, each reaching its own distances. Every profile gives a name, a number of guns, and the outer edge of four bands: **close, medium, long, extreme**. A shot falls in the first band whose distance it is still within, and beyond extreme the guns do not reach at all.
+
+Distance costs accuracy, and the bands carry a to-hit modifier for it: close ×1, medium ×0.54, long ×0.4, extreme ×0.07. So what a shot is really worth is its **effective weight of metal** — each gun counted at its own band's modifier. That, not a raw count of guns, is what the AI weighs every shot and every position by, and it is what makes closing the range worth the risk of doing so.
+
+### When a ship fires
+
+A ship fires one arc per turn, at one chunk of its movement where the arc bears on a target in range. Because the shot is taken *during* the move rather than at the end of it, an AI weighs each candidate move by the shot it would actually produce — otherwise it can manoeuvre itself out of its own firing solution, turning a bearing broadside away from a target at point-blank range.
+
+*Which* chunk is a real decision rather than a matter of taking the first thing that bears: the same broadside is worth fourteen times as much alongside as at extreme range, and a raking shot more again. So an AI takes the heaviest shot the turn offers, and the earliest of equals — firing early also means the arc is loaded again early next turn.
+
+It may also decline to fire. A shot at extreme range is barely worth the powder, so while the move is still closing on that target the guns are better kept loaded; a ship that will get no nearer fires what she has.
 
 Reloading is tracked **per arc**, not per ship. An arc that fired on chunk N is loaded again on chunk N of the following turn — a full turn's work. The other arcs are unaffected: a starboard broadside fired on chunk 2 leaves the port guns free to fire from chunk 1. Any arc that does not fire during a turn is loaded by the next one.
 

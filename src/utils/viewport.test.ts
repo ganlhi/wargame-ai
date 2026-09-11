@@ -14,6 +14,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
       in_irons: { max: 0 }, beating: { max: 60 }, reaching: { max: 80 },
       quarter_reaching: { max: 100 }, running: { max: 90 },
     },
+    speedMultiplier: 1,
     driftSpeed: 10, baseWidth: 30, baseLength: 80, firingArcs: [],
     attitude: 'reaching', isInIrons: false, grappledWith: null, tackDirection: null,
     prevAttitude: 'reaching', prevMoveDistance: null,

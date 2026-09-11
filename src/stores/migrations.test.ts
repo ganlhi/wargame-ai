@@ -75,6 +75,10 @@ describe('migrateSavedGame — infinite table', () => {
     expect(empty.originId).toBeNull()
   })
 
+  it('gives every ship a speed multiplier of 1', () => {
+    expect(game.units.every((u) => u.speedMultiplier === 1)).toBe(true)
+  })
+
   it('preserves an origin and primitive terrain already on the current schema', () => {
     const current = migrateSavedGame({
       ...legacySave,
@@ -97,5 +101,102 @@ describe('migrateSavedGame — infinite table', () => {
       height: 120,
       rotation: 4,
     })
+  })
+})
+
+describe('migrateSavedGame — guns and speed', () => {
+  /** A pre-10 save: arcs with one range and a gun count, and a sailing speed
+   *  quoted for a ship in irons. */
+  const preGunProfiles = {
+    ...legacySave,
+    schemaVersion: 9,
+    units: [
+      {
+        id: 'u1',
+        name: 'Victory',
+        side: 'ai',
+        position: { x: 0, y: 0 },
+        orientation: 0,
+        speedMultiplier: 1.25,
+        speedProfile: {
+          in_irons: { max: 40 },
+          beating: { max: 60 },
+          reaching: { max: 80 },
+          quarter_reaching: { max: 100 },
+          running: { max: 90 },
+        },
+        firingArcs: [{ id: 'a1', side: 'starboard', maxRange: 300, weapons: 12 }],
+        hiddenAIFirePlan: { targetId: 'u2', chunkIndex: 1, arcSide: 'starboard' },
+      },
+    ],
+  }
+
+  const game = migrateSavedGame({ ...preGunProfiles })
+  const unit = game.units[0]
+
+  it('turns a single range and gun count into one profile with four bands', () => {
+    expect(unit.firingArcs).toHaveLength(1)
+    const [profile] = unit.firingArcs[0].guns
+    expect(profile.guns).toBe(12)
+    // The bands reproduce the tiers the AI used to derive from `maxRange`:
+    // each 60% of the one outside it, so she fights at the same distances.
+    expect(profile.ranges).toEqual({ close: 65, medium: 108, long: 180, extreme: 300 })
+  })
+
+  it('keeps a multiplier the save already carried, full sail included', () => {
+    expect(unit.speedMultiplier).toBe(1.25)
+  })
+
+  it('falls back to 1 for a save written before multipliers existed', () => {
+    const older = migrateSavedGame({
+      ...preGunProfiles,
+      units: [{ ...preGunProfiles.units[0], speedMultiplier: undefined }],
+    })
+    expect(older.units[0].speedMultiplier).toBe(1)
+  })
+
+  it('zeroes any sailing speed quoted for a ship in irons', () => {
+    expect(unit.speedProfile.in_irons).toEqual({ max: 0 })
+    expect(unit.speedProfile.quarter_reaching).toEqual({ max: 100 })
+  })
+
+  it('drops a fire plan chosen against the old gun data', () => {
+    expect(unit.hiddenAIFirePlan).toBeNull()
+  })
+
+  it('leaves arcs already holding gun profiles alone', () => {
+    const current = migrateSavedGame({
+      ...preGunProfiles,
+      schemaVersion: 10,
+      units: [
+        {
+          ...preGunProfiles.units[0],
+          firingArcs: [
+            {
+              id: 'a1',
+              side: 'port',
+              guns: [
+                {
+                  id: 'g1',
+                  name: 'Carronade',
+                  guns: 6,
+                  ranges: { close: 40, medium: 80, long: 120, extreme: 150 },
+                },
+              ],
+            },
+          ],
+          hiddenAIFirePlan: {
+            targetId: 'u2', chunkIndex: 1, arcSide: 'port', band: 'medium', effectiveGuns: 3.24,
+          },
+        },
+      ],
+    })
+    expect(current.units[0].firingArcs[0].guns[0]).toEqual({
+      id: 'g1',
+      name: 'Carronade',
+      guns: 6,
+      ranges: { close: 40, medium: 80, long: 120, extreme: 150 },
+    })
+    expect(current.units[0].hiddenAIFirePlan?.band).toBe('medium')
   })
 })

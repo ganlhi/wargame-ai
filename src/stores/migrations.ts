@@ -1,5 +1,5 @@
-import type { ArcSide, GameState, TableTerrain, TerrainShape } from '../types'
-import { tackTurnDirection } from '../game/movement'
+import type { ArcSide, FiringArc, GameState, GunProfile, TableTerrain, TerrainShape } from '../types'
+import { normaliseSpeedMultiplier, tackTurnDirection } from '../game/movement'
 
 /**
  * Bump this whenever the persisted save shape changes, and add the
@@ -17,8 +17,12 @@ import { tackTurnDirection } from '../game/movement'
  * 9 — reloading is tracked per arc (`lastFireChunks`) rather than per ship
  *     (`lastFireChunk`). The old value did not record which arc had fired, so
  *     it cannot be carried over; every arc starts loaded instead.
+ * 10 — an arc carries a list of gun profiles with four range bands each, in
+ *     place of a single `maxRange` and gun count; `Unit.speedMultiplier` added;
+ *     and `speedProfile.in_irons` is pinned to 0, since a ship head to wind
+ *     carries no way of her own and drifts instead.
  */
-export const CURRENT_SCHEMA_VERSION = 9
+export const CURRENT_SCHEMA_VERSION = 10
 
 type RawRecord = Record<string, unknown>
 
@@ -49,6 +53,60 @@ function terrainFromVertices(vertices: { x: number; y: number }[]): {
       height: Math.max(1, Math.round(maxY - minY)),
       rotation: 0,
     },
+  }
+}
+
+/**
+ * Turn a pre-10 arc — one range and a gun count — into the profile list that
+ * replaced it. The band edges reproduce the tiers the AI used to derive from
+ * `maxRange` (each band 60% of the one outside it), so a migrated ship fights
+ * at the same distances she did before.
+ */
+function migrateFiringArc(raw: RawRecord, index: number): FiringArc {
+  const side = ((raw.side as ArcSide) ?? 'starboard')
+  const id = String(raw.id ?? `arc-${side}-${index}`)
+
+  if (Array.isArray(raw.guns)) {
+    return {
+      id,
+      side,
+      guns: (raw.guns as RawRecord[]).map((g, i) => {
+        const ranges = (g.ranges ?? {}) as RawRecord
+        return {
+          id: String(g.id ?? `${id}-gun-${i}`),
+          name: String(g.name ?? 'Guns'),
+          guns: Number(g.guns ?? 0),
+          ranges: {
+            close: Number(ranges.close ?? 0),
+            medium: Number(ranges.medium ?? 0),
+            long: Number(ranges.long ?? 0),
+            extreme: Number(ranges.extreme ?? 0),
+          },
+        } satisfies GunProfile
+      }),
+    }
+  }
+
+  const extreme = Number(raw.maxRange ?? 300)
+  const long = extreme * 0.6
+  const medium = long * 0.6
+  const close = medium * 0.6
+  return {
+    id,
+    side,
+    guns: [
+      {
+        id: `${id}-gun-0`,
+        name: 'Guns',
+        guns: Number(raw.weapons ?? 10),
+        ranges: {
+          close: Math.round(close),
+          medium: Math.round(medium),
+          long: Math.round(long),
+          extreme: Math.round(extreme),
+        },
+      },
+    ],
   }
 }
 
@@ -108,14 +166,22 @@ export function migrateSavedGame(raw: RawRecord): GameState {
     baseLength: u.baseLength ?? 80,
     grappledWith: u.grappledWith ?? null,
     lastFireChunks: (u.lastFireChunks ?? {}) as Partial<Record<ArcSide, number>>,
-    hiddenAIFirePlan: u.hiddenAIFirePlan ?? null,
+    // A fire plan from before schema 10 records no range band, and was chosen
+    // against gun data that has since been reshaped — so it is stale rather
+    // than merely incomplete. Dropping it costs at most one turn's declared
+    // shot on a game saved mid-reveal.
+    hiddenAIFirePlan:
+      u.hiddenAIFirePlan && (u.hiddenAIFirePlan as RawRecord).band ? u.hiddenAIFirePlan : null,
     hiddenAIAction: u.hiddenAIAction ?? null,
-    firingArcs: ((u.firingArcs ?? []) as RawRecord[]).map((a) => ({
-      id: String(a.id ?? ''),
-      side: (a.side as 'bow' | 'stern' | 'port' | 'starboard') ?? 'starboard',
-      maxRange: Number(a.maxRange ?? 300),
-      weapons: Number(a.weapons ?? 10),
-    })),
+    speedMultiplier: normaliseSpeedMultiplier(Number(u.speedMultiplier ?? 1)),
+    // A ship in irons makes no way of her own, so there is no sailing speed to
+    // quote for it — older saves may carry one, which would have the AI rate
+    // being head to wind as a decent point of sail.
+    speedProfile: {
+      ...((u.speedProfile ?? {}) as GameState['units'][number]['speedProfile']),
+      in_irons: { max: 0 },
+    },
+    firingArcs: ((u.firingArcs ?? []) as RawRecord[]).map(migrateFiringArc),
   })) as GameState['units']
 
   // Pre-v5 saves have no origin. World coordinates stay exactly as they were —

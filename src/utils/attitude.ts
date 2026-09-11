@@ -49,6 +49,14 @@ export function computeAttitude(
   return 'running'
 }
 
+/**
+ * The points of sail a ship can actually be driven on, best to worst. In irons
+ * is deliberately absent: a ship head to wind carries no way of her own and
+ * goes where the wind takes her at her drift speed, so there is no sailing
+ * speed to enter for it.
+ */
+export const SAILING_ATTITUDES: Attitude[] = ['quarter_reaching', 'running', 'reaching', 'beating']
+
 export const ATTITUDE_LABELS: Record<Attitude, string> = {
   in_irons: 'In Irons',
   beating: 'Beating',

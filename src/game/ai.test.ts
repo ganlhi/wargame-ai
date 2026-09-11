@@ -8,7 +8,7 @@ import { centerFromSternMidpoint } from '../utils/coordinates'
 import { computeAttitude } from '../utils/attitude'
 import { distance } from '../utils/geometry'
 import { baseCorners, polygonsIntersect } from '../utils/geometry'
-import type { Unit, Attitude, SpeedRange, FiringArc, MovementPlan, TableTerrain } from '../types'
+import type { Unit, Attitude, ArcSide, SpeedRange, FiringArc, MovementPlan, TableTerrain } from '../types'
 
 const IDLE_PLAN: MovementPlan = {
   chunks: [{ distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }],
@@ -24,7 +24,32 @@ const SPEED_PROFILE: Record<Attitude, SpeedRange> = {
   running: { max: 90 },
 }
 
-const STARBOARD_ARC: FiringArc = { id: 'a1', side: 'starboard', maxRange: 300, weapons: 10 }
+/**
+ * An arc carrying one kind of gun, with the bands a single `extreme` range
+ * implies: each one 60% of the band outside it, which is how the AI used to
+ * derive its range tiers and what older saves migrate to.
+ */
+function makeArc(id: string, side: ArcSide, extreme = 300, guns = 10): FiringArc {
+  return {
+    id,
+    side,
+    guns: [
+      {
+        id: `${id}-g`,
+        name: 'Guns',
+        guns,
+        ranges: {
+          close: Math.round(extreme * 0.216),
+          medium: Math.round(extreme * 0.36),
+          long: Math.round(extreme * 0.6),
+          extreme,
+        },
+      },
+    ],
+  }
+}
+
+const STARBOARD_ARC: FiringArc = makeArc('a1', 'starboard')
 
 function makeUnit(overrides: Partial<Unit> = {}): Unit {
   return {
@@ -38,6 +63,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     maxTurnPoints: 6,
     foreAndAftRigged: false,
     speedProfile: SPEED_PROFILE,
+    speedMultiplier: 1,
     driftSpeed: 10,
     baseWidth: 30,
     baseLength: 80,
@@ -203,6 +229,38 @@ describe('suggestMovement', () => {
   })
 })
 
+describe('range tiers when the enemy carries no gun layout', () => {
+  // Only AI ships have a gun layout entered — the player rolls their own fire —
+  // so the AI has to judge its distance from a player ship by its own bands.
+  const unarmedPlayer = makeUnit({
+    id: 'e1', side: 'player', position: { x: 0, y: 0 }, firingArcs: [],
+  })
+
+  it('still reads close range as dangerous for a defensive ship', () => {
+    const near = makeUnit({
+      aiStyle: 'defensive', position: { x: 50, y: 0 }, firingArcs: [STARBOARD_ARC],
+    })
+    const off = makeUnit({
+      aiStyle: 'defensive', position: { x: 400, y: 0 }, firingArcs: [STARBOARD_ARC],
+    })
+    expect(evaluatePosition(off, [unarmedPlayer], [])).toBeGreaterThan(
+      evaluatePosition(near, [unarmedPlayer], []),
+    )
+  })
+
+  it('still reads close range as an opportunity for an aggressive one', () => {
+    const near = makeUnit({
+      aiStyle: 'aggressive', position: { x: 50, y: 0 }, firingArcs: [STARBOARD_ARC],
+    })
+    const off = makeUnit({
+      aiStyle: 'aggressive', position: { x: 400, y: 0 }, firingArcs: [STARBOARD_ARC],
+    })
+    expect(evaluatePosition(near, [unarmedPlayer], [])).toBeGreaterThan(
+      evaluatePosition(off, [unarmedPlayer], []),
+    )
+  })
+})
+
 describe('disengagement leash (infinite table)', () => {
   // STARBOARD_ARC reaches 300mm, so the leash sits at 1.5 × 400 (the fallback
   // floor, which exceeds 300) = 600mm from the nearest enemy.
@@ -294,8 +352,8 @@ describe('tacking as an AI choice', () => {
     quarter_reaching: { max: 0 }, running: { max: 0 },
   }
   const BROADSIDES: FiringArc[] = [
-    { id: 'p', side: 'port', maxRange: 300, weapons: 10 },
-    { id: 's', side: 'starboard', maxRange: 300, weapons: 10 },
+    makeArc('p', 'port'),
+    makeArc('s', 'starboard'),
   ]
 
   // Wind from the north. Orientation 6 is beating with the wind on the port
@@ -436,8 +494,8 @@ describe('tacking as an AI choice', () => {
 
 describe('choosing a move that actually fires', () => {
   const BROADSIDES: FiringArc[] = [
-    { id: 'p', side: 'port', maxRange: 300, weapons: 10 },
-    { id: 's', side: 'starboard', maxRange: 300, weapons: 10 },
+    makeArc('p', 'port'),
+    makeArc('s', 'starboard'),
   ]
   const STATIONARY: MovementPlan = {
     chunks: [{ distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }],

@@ -74,11 +74,93 @@ export function arcSideLabel(side: ArcSide): string {
   }
 }
 
+export const RANGE_BANDS = ['close', 'medium', 'long', 'extreme'] as const
+export type RangeBand = (typeof RANGE_BANDS)[number]
+
+/**
+ * To-hit modifier for a shot taken in each band. Close range is the yardstick;
+ * beyond it a shot is worth a fraction of the same broadside fired at point
+ * blank, and an extreme-range one is barely worth the powder. These are what
+ * make closing the range worth the risk of doing so, so the AI weighs every
+ * candidate shot by them rather than by a raw count of guns.
+ */
+export const RANGE_BAND_MODIFIERS: Record<RangeBand, number> = {
+  close: 1,
+  medium: 0.54,
+  long: 0.4,
+  extreme: 0.07,
+}
+
+export const RANGE_BAND_LABELS: Record<RangeBand, string> = {
+  close: 'Close',
+  medium: 'Medium',
+  long: 'Long',
+  extreme: 'Extreme',
+}
+
+/**
+ * One kind of gun in an arc. A broadside is rarely uniform — 24-pounders on the
+ * gun deck and carronades on the quarterdeck reach quite different distances —
+ * so an arc carries a list of these rather than a single range and gun count.
+ *
+ * `ranges` gives the *outer* edge of each band, so a shot falls in the first
+ * band whose distance it is still within, and `ranges.extreme` is how far the
+ * guns reach at all.
+ */
+export interface GunProfile {
+  id: string
+  name: string
+  guns: number
+  ranges: Record<RangeBand, number>
+}
+
 export interface FiringArc {
   id: string
   side: ArcSide
-  maxRange: number
-  weapons: number
+  guns: GunProfile[]
+}
+
+/** Which band `dist` falls in for these guns, or null if it is out of reach. */
+export function bandForDistance(profile: GunProfile, dist: number): RangeBand | null {
+  for (const band of RANGE_BANDS) {
+    if (dist <= profile.ranges[band]) return band
+  }
+  return null
+}
+
+/** How far an arc reaches at all: the longest extreme range any of its guns has. */
+export function arcMaxRange(arc: FiringArc): number {
+  return arc.guns.reduce((max, g) => Math.max(max, g.ranges.extreme), 0)
+}
+
+/** Guns in the arc, irrespective of range. */
+export function arcGunCount(arc: FiringArc): number {
+  return arc.guns.reduce((n, g) => n + g.guns, 0)
+}
+
+/**
+ * The weight of metal the arc would actually land at `dist`: every gun counted
+ * at its own band's to-hit modifier. 0 means nothing in the arc reaches.
+ */
+export function arcEffectiveGuns(arc: FiringArc, dist: number): number {
+  let total = 0
+  for (const g of arc.guns) {
+    const band = bandForDistance(g, dist)
+    if (band) total += g.guns * RANGE_BAND_MODIFIERS[band]
+  }
+  return total
+}
+
+/**
+ * The closest band any of the arc's guns puts a target at `dist` in — the
+ * quality of the best shot available, used to decide whether one is worth
+ * taking at all. null when nothing reaches.
+ */
+export function arcBestBand(arc: FiringArc, dist: number): RangeBand | null {
+  for (const band of RANGE_BANDS) {
+    if (arc.guns.some((g) => g.guns > 0 && bandForDistance(g, dist) === band)) return band
+  }
+  return null
 }
 
 export interface SpeedRange {
@@ -96,6 +178,10 @@ export interface FirePlan {
   targetId: string
   chunkIndex: number
   arcSide: ArcSide
+  /** The closest band the shot falls in — how good a shot it is. */
+  band: RangeBand
+  /** Guns bearing, each weighted by its band's to-hit modifier. */
+  effectiveGuns: number
 }
 
 /**
@@ -123,7 +209,18 @@ export interface Unit {
    * still in irons at 5 and only starts beating at 6.
    */
   foreAndAftRigged: boolean
+  /**
+   * Top speed on each point of sail. `in_irons` is always 0: a ship head to
+   * wind carries no way of her own and goes where the wind takes her, at
+   * `driftSpeed`, so there is no sailing speed to quote.
+   */
   speedProfile: Record<Attitude, SpeedRange>
+  /**
+   * Scales every figure in `speedProfile`, so one decimal makes a ship faster
+   * or slower overall without re-entering each point of sail. 1 = as entered,
+   * below it shortened down, above it under full sail, 0 = dead in the water.
+   */
+  speedMultiplier: number
   driftSpeed: number
   // Footprint of the physical base the model is mounted on, in mm. `baseLength`
   // runs along the bow–stern axis, `baseWidth` across (port–starboard). Used for

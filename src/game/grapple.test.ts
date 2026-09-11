@@ -22,6 +22,7 @@ function makeUnit(id: string, overrides: Partial<Unit> = {}): Unit {
     maxTurnPoints: 6,
     foreAndAftRigged: false,
     speedProfile: SPEED_PROFILE,
+    speedMultiplier: 1,
     driftSpeed: 10,
     baseWidth: 30,
     baseLength: 80,

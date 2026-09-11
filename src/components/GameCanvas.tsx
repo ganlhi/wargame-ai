@@ -4,7 +4,7 @@ import { useGameStore } from '../stores/gameStore'
 import { Select } from './Select'
 import { TERRAIN_COLORS, TERRAIN_TYPE_OPTIONS } from '../utils/terrainStyles'
 import type { GameState, TerrainType, UnitStatus } from '../types'
-import { arcSideToAngles } from '../types'
+import { arcMaxRange, arcSideToAngles } from '../types'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
 import { orientationToVector, driftVector } from '../game/movement'
 import type { Point } from '../utils/geometry'
@@ -628,7 +628,7 @@ export function GameCanvas({
           const a = arcSideToAngles(arc.side)
           const worldMin = ((firingOrientDeg + a.minAngle) % 360 + 360) % 360
           const worldMax = ((firingOrientDeg + a.maxAngle) % 360 + 360) % 360
-          const radius = arc.maxRange * scale
+          const radius = arcMaxRange(arc) * scale
           const toScreenAngle = (deg: number) => (deg - 90) * Math.PI / 180
           const steps = 16
           const color = 0x22c55e

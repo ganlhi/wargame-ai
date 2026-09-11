@@ -1,13 +1,48 @@
-import type { Attitude, Unit, MovementPlan, MoveChunk, SpeedRange } from '../types'
+import type { Attitude, Unit, MovementPlan, MoveChunk } from '../types'
 import { computeAttitude, windTowardPoint } from '../utils/attitude'
 
 export const MOVEMENT_STEP = 5
 
-export function getSpeedRangeForAttitude(
-  attitude: Attitude,
-  speedProfile: Record<Attitude, SpeedRange>,
-): SpeedRange {
-  return speedProfile[attitude]
+/**
+ * A ship's top speed on a point of sail, before any turn points are spent: the
+ * figure from her speed profile scaled by her own multiplier. Everything that
+ * needs a maximum goes through here, so the multiplier applies uniformly — to
+ * the ceiling, to the half-of-maximum opening minimum, and to the AI's
+ * projections of where a ship will be next turn.
+ */
+export function topSpeed(unit: Unit, attitude: Attitude = unit.attitude): number {
+  return scaleSpeed(unit.speedProfile[attitude].max, unit.speedMultiplier)
+}
+
+/** Apply a ship's multiplier to one figure from her speed profile. */
+export function scaleSpeed(max: number, speedMultiplier: number): number {
+  return max * normaliseSpeedMultiplier(speedMultiplier)
+}
+
+/**
+ * A speed multiplier as a decimal: any positive figure, since a ship under full
+ * sail may well beat the profile she is usually worked at. Only negatives and
+ * nonsense are ruled out — 1 when nothing usable is given.
+ */
+export function normaliseSpeedMultiplier(value: number | undefined | null): number {
+  if (value === undefined || value === null || Number.isNaN(value)) return 1
+  return Math.max(0, value)
+}
+
+/**
+ * The multiplier is stored as a decimal but *entered* as a whole percentage —
+ * 90% for a ship worked at nine tenths of her profile. A field that reparses
+ * every keystroke cannot hold a half-typed decimal: "0." is not yet a number,
+ * so it lands as 0 and the digits after the point never get in. A whole
+ * percentage has no such intermediate state.
+ */
+export function speedMultiplierToPercent(multiplier: number | undefined | null): number {
+  return Math.round(normaliseSpeedMultiplier(multiplier) * 100)
+}
+
+export function speedMultiplierFromPercent(percent: number): number {
+  if (!Number.isFinite(percent)) return 1
+  return Math.max(0, percent) / 100
 }
 
 export function computeEffectiveMaxSpeed(baseMaxSpeed: number, turnPoints: number): number {
@@ -295,7 +330,7 @@ export function enumerateMovementPlans(
   prevAttitude: Attitude | null,
 ): MovementPlan[] {
   const plans: MovementPlan[] = []
-  const { maxTurnPoints, speedProfile } = unit
+  const { maxTurnPoints } = unit
 
   // Mid-tack there is nothing to decide: the ship must keep swinging the same
   // way, under no sail, until it comes onto the new tack.
@@ -303,22 +338,25 @@ export function enumerateMovementPlans(
     return [buildTackPlan(unit, windAngle)]
   }
 
-  const range = getSpeedRangeForAttitude(computeAttitude(windAngle, unit.orientation, unit.foreAndAftRigged), speedProfile)
+  const maxSpeed = topSpeed(
+    unit,
+    computeAttitude(windAngle, unit.orientation, unit.foreAndAftRigged),
+  )
 
-  const effectiveMinDist = minMoveDistance(unit.prevMoveDistance, range.max)
+  const effectiveMinDist = minMoveDistance(unit.prevMoveDistance, maxSpeed)
   const startDist = Math.ceil(effectiveMinDist / MOVEMENT_STEP) * MOVEMENT_STEP
-  const endDist = range.max
+  const endDist = maxSpeed
 
   for (let dist = startDist; dist <= endDist; dist += MOVEMENT_STEP) {
     const chunkDistances = splitMovement(dist)
 
     if (maxTurnPoints === 0) {
-      plans.push(buildPlan(chunkDistances, [], 0, range.max))
+      plans.push(buildPlan(chunkDistances, [], 0, maxSpeed))
       continue
     }
 
     for (let totalTP = 1; totalTP <= maxTurnPoints; totalTP++) {
-      const effMax = computeEffectiveMaxSpeed(range.max, totalTP)
+      const effMax = computeEffectiveMaxSpeed(maxSpeed, totalTP)
       if (dist > effMax) continue
 
       const dirs: ('port' | 'starboard')[] = ['port', 'starboard']
@@ -327,7 +365,7 @@ export function enumerateMovementPlans(
 
       for (const b of boundaries) {
         for (const d of dirs) {
-          plans.push(buildPlan(chunkDistances, [{ afterChunk: b, direction: d, points: totalTP }], totalTP, range.max))
+          plans.push(buildPlan(chunkDistances, [{ afterChunk: b, direction: d, points: totalTP }], totalTP, maxSpeed))
         }
       }
 
@@ -345,7 +383,7 @@ export function enumerateMovementPlans(
                       { afterChunk: boundaries[bj], direction: d2, points: tp2 },
                     ],
                     totalTP,
-                    range.max,
+                    maxSpeed,
                   ))
                 }
               }
@@ -359,11 +397,11 @@ export function enumerateMovementPlans(
   if (effectiveMinDist <= 0) {
     for (let tp = 1; tp <= maxTurnPoints; tp++) {
       for (const dir of (['port', 'starboard'] as const)) {
-        plans.push(buildPlan([0, 0, 0, 0, 0], [{ afterChunk: 0, direction: dir, points: tp }], tp, range.max))
+        plans.push(buildPlan([0, 0, 0, 0, 0], [{ afterChunk: 0, direction: dir, points: tp }], tp, maxSpeed))
       }
     }
 
-    plans.push(buildPlan([0, 0, 0, 0, 0], [], 0, range.max))
+    plans.push(buildPlan([0, 0, 0, 0, 0], [], 0, maxSpeed))
   }
 
   // Turning up into the wind is only legal through the tacking procedure, so

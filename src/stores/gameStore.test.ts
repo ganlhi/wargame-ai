@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import type { Unit } from '../types'
+import type { ArcSide, FiringArc, Unit } from '../types'
 
 // The store reaches for localStorage at import time (zustand `persist`) and on
 // save/load. A tiny in-memory stand-in keeps these tests in the default node
@@ -18,6 +18,31 @@ globalThis.localStorage = new MemoryStorage() as unknown as Storage
 const { useGameStore } = await import('./gameStore')
 const { buildTackPlan } = await import('../game/movement')
 
+/**
+ * An arc carrying one kind of gun, with the bands a single `extreme` range
+ * implies: each one 60% of the band outside it, which is how the AI used to
+ * derive its range tiers and what older saves migrate to.
+ */
+function makeArc(id: string, side: ArcSide, extreme = 300, guns = 10): FiringArc {
+  return {
+    id,
+    side,
+    guns: [
+      {
+        id: `${id}-g`,
+        name: 'Guns',
+        guns,
+        ranges: {
+          close: Math.round(extreme * 0.216),
+          medium: Math.round(extreme * 0.36),
+          long: Math.round(extreme * 0.6),
+          extreme,
+        },
+      },
+    ],
+  }
+}
+
 function makeUnit(id: string, overrides: Partial<Unit> = {}): Unit {
   return {
     id,
@@ -33,10 +58,11 @@ function makeUnit(id: string, overrides: Partial<Unit> = {}): Unit {
       in_irons: { max: 0 }, beating: { max: 60 }, reaching: { max: 80 },
       quarter_reaching: { max: 100 }, running: { max: 90 },
     },
+    speedMultiplier: 1,
     driftSpeed: 10,
     baseWidth: 30,
     baseLength: 80,
-    firingArcs: [{ id: `${id}-a`, side: 'starboard', maxRange: 300, weapons: 10 }],
+    firingArcs: [makeArc(`${id}-a`, 'starboard')],
     attitude: 'reaching',
     isInIrons: false,
     grappledWith: null,
@@ -250,8 +276,8 @@ describe('gameStore — reloading', () => {
   } as Unit['hiddenAIOrder']
 
   const BROADSIDES = [
-    { id: 'p', side: 'port' as const, maxRange: 300, weapons: 10 },
-    { id: 's', side: 'starboard' as const, maxRange: 300, weapons: 10 },
+    makeArc('p', 'port'),
+    makeArc('s', 'starboard'),
   ]
 
   const ai = () => store().currentGame!.units.find((u) => u.id === 'ai1')!

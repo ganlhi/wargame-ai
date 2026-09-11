@@ -10,6 +10,10 @@ import {
   applyMovementPlan,
   enumerateMovementPlans,
   minMoveDistance,
+  topSpeed,
+  normaliseSpeedMultiplier,
+  speedMultiplierFromPercent,
+  speedMultiplierToPercent,
 } from './movement'
 import type { Unit, MovementPlan, MoveChunk, Attitude, SpeedRange } from '../types'
 import { computeAttitude } from '../utils/attitude'
@@ -34,6 +38,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     maxTurnPoints: 6,
     foreAndAftRigged: false,
     speedProfile: SPEED_PROFILE,
+    speedMultiplier: 1,
     driftSpeed: 10,
     baseWidth: 30,
     baseLength: 80,
@@ -407,5 +412,83 @@ describe('tacking procedure', () => {
         expect(applyMovementPlan(unit, plan, 0).attitude).not.toBe('in_irons')
       }
     })
+  })
+})
+
+describe('speed multiplier', () => {
+  const attitude = computeAttitude(0, 8, false)
+  const totalOf = (p: { chunks: { distance: number }[] }) =>
+    p.chunks.reduce((sum, c) => sum + c.distance, 0)
+  const furthest = (u: Unit) =>
+    Math.max(...enumerateMovementPlans(u, 0, null).map(totalOf))
+
+  it('scales the top speed on every point of sail', () => {
+    const plain = makeUnit({ orientation: 8, speedMultiplier: 1 })
+    expect(topSpeed(plain, attitude)).toBe(SPEED_PROFILE[attitude].max)
+    expect(topSpeed({ ...plain, speedMultiplier: 0.5 }, attitude)).toBe(
+      SPEED_PROFILE[attitude].max * 0.5,
+    )
+    // Above 1 too: a ship under full sail beats the profile she is usually
+    // worked at, so the figure is a free decimal rather than a fraction.
+    expect(topSpeed({ ...plain, speedMultiplier: 1.35 }, attitude)).toBeCloseTo(
+      SPEED_PROFILE[attitude].max * 1.35,
+    )
+  })
+
+  it('takes any positive decimal, and nothing else', () => {
+    expect(normaliseSpeedMultiplier(0.85)).toBe(0.85)
+    expect(normaliseSpeedMultiplier(2.5)).toBe(2.5)
+    expect(normaliseSpeedMultiplier(-1)).toBe(0)
+    expect(normaliseSpeedMultiplier(undefined)).toBe(1)
+    expect(normaliseSpeedMultiplier(NaN)).toBe(1)
+  })
+
+  it('is entered as a whole percentage and stored as the decimal', () => {
+    // 90% is the case a decimal field could not take: "0." reparses to 0 and
+    // swallows the digits after the point.
+    expect(speedMultiplierFromPercent(90)).toBe(0.9)
+    expect(speedMultiplierFromPercent(100)).toBe(1)
+    expect(speedMultiplierFromPercent(135)).toBe(1.35)
+    expect(speedMultiplierFromPercent(0)).toBe(0)
+    // An emptied field parses as NaN rather than a number.
+    expect(speedMultiplierFromPercent(NaN)).toBe(1)
+    expect(speedMultiplierFromPercent(-20)).toBe(0)
+  })
+
+  it('shows a stored multiplier back as the percentage that produced it', () => {
+    for (const percent of [0, 55, 90, 100, 135, 250]) {
+      expect(speedMultiplierToPercent(speedMultiplierFromPercent(percent))).toBe(percent)
+    }
+    expect(speedMultiplierToPercent(undefined)).toBe(100)
+  })
+
+  it('applies the entered percentage to the speed profile', () => {
+    const shortened = makeUnit({
+      orientation: 8,
+      speedMultiplier: speedMultiplierFromPercent(90),
+    })
+    expect(topSpeed(shortened, attitude)).toBeCloseTo(SPEED_PROFILE[attitude].max * 0.9)
+  })
+
+  it('moves the ceiling on what a ship may be ordered to sail', () => {
+    const base = makeUnit({ orientation: 8, maxTurnPoints: 0, prevMoveDistance: 0 })
+    expect(furthest({ ...base, speedMultiplier: 0.5 })).toBeLessThan(furthest(base))
+    expect(furthest({ ...base, speedMultiplier: 1.5 })).toBeGreaterThan(furthest(base))
+  })
+
+  it('moves the floor too, for a ship that has yet to move', () => {
+    // The opening minimum is half the maximum, so a ship under more sail must
+    // also commit to more way: the multiplier applies to both ends at once.
+    const base = makeUnit({ orientation: 8, maxTurnPoints: 0, prevMoveDistance: null })
+    const shortest = (u: Unit) =>
+      Math.min(...enumerateMovementPlans(u, 0, null).map(totalOf))
+
+    expect(shortest({ ...base, speedMultiplier: 1.5 })).toBeGreaterThan(shortest(base))
+  })
+
+  it('brings a ship to a standstill at 0', () => {
+    const becalmed = makeUnit({ orientation: 8, speedMultiplier: 0 })
+    expect(topSpeed(becalmed, attitude)).toBe(0)
+    expect(enumerateMovementPlans(becalmed, 0, null).every((p) => totalOf(p) === 0)).toBe(true)
   })
 })

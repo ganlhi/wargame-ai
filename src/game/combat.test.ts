@@ -1,16 +1,28 @@
 import { describe, it, expect } from 'vitest'
 import { computeAIFirePlan } from './combat'
-import type { Unit, Attitude, SpeedRange, FiringArc, MovementPlan, ArcSide } from '../types'
+import type { Unit, Attitude, SpeedRange, FiringArc, GunProfile, MovementPlan, ArcSide } from '../types'
 
 const SPEED_PROFILE: Record<Attitude, SpeedRange> = {
   in_irons: { max: 0 }, beating: { max: 60 }, reaching: { max: 80 },
   quarter_reaching: { max: 100 }, running: { max: 90 },
 }
 
-/** Both broadsides, 300mm, so only bearing and reloading decide the shot. */
+function gun(id: string, guns: number, close: number, reach = close * 3): GunProfile {
+  return {
+    id,
+    name: id,
+    guns,
+    ranges: { close, medium: close * 1.5, long: close * 2, extreme: reach },
+  }
+}
+
+/**
+ * Both broadsides, and everything the tests place is well inside close range,
+ * so only bearing and reloading decide the shot.
+ */
 const BROADSIDES: FiringArc[] = [
-  { id: 'p', side: 'port', maxRange: 300, weapons: 10 },
-  { id: 's', side: 'starboard', maxRange: 300, weapons: 10 },
+  { id: 'p', side: 'port', guns: [gun('p-g', 10, 300)] },
+  { id: 's', side: 'starboard', guns: [gun('s-g', 10, 300)] },
 ]
 
 /** Nobody moves, so the geometry is the same on every chunk of the turn. */
@@ -25,6 +37,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     id: 'u1', name: 'Test', side: 'ai',
     position: { x: 0, y: 0 }, orientation: 0, status: 'active', aiStyle: 'aggressive',
     maxTurnPoints: 6, foreAndAftRigged: false, speedProfile: SPEED_PROFILE,
+    speedMultiplier: 1,
     driftSpeed: 10, baseWidth: 30, baseLength: 80, firingArcs: BROADSIDES,
     attitude: 'reaching', isInIrons: false, grappledWith: null, tackDirection: null,
     prevAttitude: 'reaching', prevMoveDistance: 0,
@@ -45,14 +58,14 @@ describe('computeAIFirePlan', () => {
   it('fires at the first chunk when everything is loaded', () => {
     const ai = firer()
     expect(computeAIFirePlan(ai, [ai, toStarboard], 0)).toEqual({
-      targetId: 'east', chunkIndex: 0, arcSide: 'starboard',
+      targetId: 'east', chunkIndex: 0, arcSide: 'starboard', band: 'close', effectiveGuns: 10,
     })
   })
 
   it('holds an arc that fired last turn until that chunk comes round again', () => {
     const ai = firer({ starboard: 2 })
     expect(computeAIFirePlan(ai, [ai, toStarboard], 0)).toEqual({
-      targetId: 'east', chunkIndex: 2, arcSide: 'starboard',
+      targetId: 'east', chunkIndex: 2, arcSide: 'starboard', band: 'close', effectiveGuns: 10,
     })
   })
 
@@ -60,7 +73,7 @@ describe('computeAIFirePlan', () => {
     // Starboard is out until chunk 2, but the port guns never fired.
     const ai = firer({ starboard: 2 })
     expect(computeAIFirePlan(ai, [ai, toStarboard, toPort], 0)).toEqual({
-      targetId: 'west', chunkIndex: 0, arcSide: 'port',
+      targetId: 'west', chunkIndex: 0, arcSide: 'port', band: 'close', effectiveGuns: 10,
     })
   })
 
@@ -80,7 +93,7 @@ describe('computeAIFirePlan', () => {
       firingArcs: [BROADSIDES[1]], // starboard only
     })
     expect(computeAIFirePlan(ai, [ai, toStarboard], 0)).toEqual({
-      targetId: 'east', chunkIndex: 4, arcSide: 'starboard',
+      targetId: 'east', chunkIndex: 4, arcSide: 'starboard', band: 'close', effectiveGuns: 10,
     })
   })
 
@@ -97,8 +110,8 @@ describe('computeAIFirePlan', () => {
     const ai = makeUnit({
       id: 'ai1', hiddenAIOrder: STATIONARY,
       firingArcs: [
-        { id: 'p', side: 'port', maxRange: 300, weapons: 4 },
-        { id: 's', side: 'starboard', maxRange: 300, weapons: 12 },
+        { id: 'p', side: 'port', guns: [gun('p-g', 4, 300)] },
+        { id: 's', side: 'starboard', guns: [gun('s-g', 12, 300)] },
       ],
     })
     expect(computeAIFirePlan(ai, [ai, toStarboard], 0)?.arcSide).toBe('starboard')
@@ -117,5 +130,82 @@ describe('computeAIFirePlan', () => {
 
   it('has nothing to plan without an order to simulate', () => {
     expect(computeAIFirePlan(makeUnit({ hiddenAIOrder: null }), [toStarboard], 0)).toBeNull()
+  })
+})
+
+describe('computeAIFirePlan — choosing the shot', () => {
+  /** One broadside whose bands are tight enough that the chunk chosen matters. */
+  const shortRanged: FiringArc[] = [{ id: 's', side: 'starboard', guns: [gun('s-g', 10, 100, 400)] }]
+
+  /** A ship under way at `perChunk` mm a chunk, holding her heading. */
+  const runIn = (perChunk: number): MovementPlan => ({
+    chunks: [
+      { distance: perChunk }, { distance: perChunk }, { distance: perChunk },
+      { distance: perChunk }, { distance: perChunk },
+    ],
+    totalTurnPoints: 0,
+    effectiveMaxSpeed: perChunk * 5,
+  })
+
+  /**
+   * An enemy running down on the AI from the east, so she stays on the
+   * starboard beam throughout while the range shortens chunk by chunk.
+   */
+  const bearingDown = (from: number, perChunk: number) =>
+    makeUnit({
+      id: 'east', side: 'player', position: { x: from, y: 0 }, orientation: 24,
+      playerOrder: runIn(perChunk),
+    })
+
+  it('waits for the closer shot rather than firing the first that bears', () => {
+    const ai = makeUnit({ id: 'ai1', hiddenAIOrder: STATIONARY, firingArcs: shortRanged })
+    // 340mm on the first chunk down to 100mm on the last.
+    const target = bearingDown(400, 60)
+
+    const plan = computeAIFirePlan(ai, [ai, target], 0)
+    // The guns bear from the first chunk, but only at extreme range, where the
+    // shot is worth a fourteenth of what it is worth once she is alongside.
+    expect(plan).not.toBeNull()
+    expect(plan!.chunkIndex).toBe(4)
+    expect(plan!.band).toBe('close')
+    expect(plan!.effectiveGuns).toBe(10)
+  })
+
+  it('takes the earliest of equally heavy shots, so the arc reloads sooner', () => {
+    const ai = firer()
+    expect(computeAIFirePlan(ai, [ai, toStarboard], 0)?.chunkIndex).toBe(0)
+  })
+
+  it('holds fire at extreme range while the range is still closing', () => {
+    const ai = makeUnit({ id: 'ai1', hiddenAIOrder: STATIONARY, firingArcs: shortRanged })
+    // 370mm down to 250mm: still extreme all the way, and still shortening —
+    // so the broadside is worth keeping loaded for next turn.
+    expect(computeAIFirePlan(ai, [ai, bearingDown(400, 30)], 0)).toBeNull()
+  })
+
+  it('fires what it has at extreme range when it will get no nearer', () => {
+    const ai = makeUnit({
+      id: 'ai1', hiddenAIOrder: STATIONARY, firingArcs: shortRanged,
+    })
+    const target = makeUnit({ id: 'east', side: 'player', position: { x: 380, y: 0 } })
+    const plan = computeAIFirePlan(ai, [ai, target], 0)
+    expect(plan?.band).toBe('extreme')
+  })
+
+  it('prefers the heavier weight of metal over the nearer band', () => {
+    const ai = makeUnit({
+      id: 'ai1', hiddenAIOrder: STATIONARY,
+      firingArcs: [
+        // A single bow chaser at close range against a whole broadside at long.
+        { id: 'b', side: 'bow', guns: [gun('b-g', 1, 300)] },
+        { id: 's', side: 'starboard', guns: [gun('s-g', 40, 100, 400)] },
+      ],
+    })
+    const ahead = makeUnit({ id: 'north', side: 'player', position: { x: 0, y: -150 } })
+    const abeam = makeUnit({ id: 'east', side: 'player', position: { x: 180, y: 0 } })
+
+    const plan = computeAIFirePlan(ai, [ai, ahead, abeam], 0)
+    expect(plan?.arcSide).toBe('starboard')
+    expect(plan?.band).toBe('long')
   })
 })

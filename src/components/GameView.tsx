@@ -7,7 +7,7 @@ import { TerrainFormModal } from './TerrainFormModal'
 import { TerrainPanel } from './TerrainPanel'
 import { PlayerMovementPanel } from './PlayerMovementPanel'
 import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
-import { arcSideLabel } from '../types'
+import { RANGE_BAND_LABELS, arcSideLabel } from '../types'
 import type { ArcSide } from '../types'
 import { suggestMovement } from '../game/ai'
 import { originName } from '../utils/coordinates'
@@ -298,6 +298,7 @@ export function GameView() {
                           return (
                             <p className="text-red-400 font-medium pt-1">
                               ⚡ Fire {arcSideLabel(aiUnit.hiddenAIFirePlan.arcSide)} at {target?.name ?? 'unknown'} on chunk {aiUnit.hiddenAIFirePlan.chunkIndex + 1}
+                              {' '}({RANGE_BAND_LABELS[aiUnit.hiddenAIFirePlan.band].toLowerCase()} range)
                             </p>
                           )
                         })()}

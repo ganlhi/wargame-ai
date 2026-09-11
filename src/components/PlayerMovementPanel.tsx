@@ -3,7 +3,7 @@ import type { Unit, MovementPlan, MoveChunk } from '../types'
 import { useGameStore } from '../stores/gameStore'
 import { computeAttitude, ATTITUDE_LABELS } from '../utils/attitude'
 import {
-  splitMovement, computeEffectiveMaxSpeed, minMoveDistance, buildTackPlan, canTack,
+  splitMovement, computeEffectiveMaxSpeed, minMoveDistance, buildTackPlan, canTack, scaleSpeed,
 } from '../game/movement'
 import { Select } from './Select'
 
@@ -73,7 +73,7 @@ export function PlayerMovementPanel({ unit }: Props) {
     () => turns.reduce((sum, t) => sum + (t.direction ? t.points : 0), 0),
     [turns],
   )
-  const baseMax = unit.speedProfile[attitude].max
+  const baseMax = Math.round(scaleSpeed(unit.speedProfile[attitude].max, unit.speedMultiplier))
   const maxDist = Math.floor(computeEffectiveMaxSpeed(baseMax, totalTurnPoints))
   const minDist = Math.ceil(minMoveDistance(unit.prevMoveDistance, baseMax))
   const outOfRange = totalDist < minDist || totalDist > maxDist
