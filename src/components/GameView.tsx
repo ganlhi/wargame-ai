@@ -24,6 +24,13 @@ export function GameView() {
   const [showBases, setShowBases] = useState(false)
   const [expandedAIUnit, setExpandedAIUnit] = useState<string | null>(null)
   const hasContent = (currentGame?.terrain?.length ?? 0) > 0 || (currentGame?.units?.length ?? 0) > 0
+  /**
+   * Nothing on the table yet, so the next thing added becomes the origin and
+   * reads (0, 0) wherever it is put. There is no frame to measure a click
+   * against and the form pins it to the origin regardless, so asking for one
+   * would be asking a question whose answer is thrown away.
+   */
+  const placingOrigin = !currentGame?.originId
   const [setupComplete, setSetupComplete] = useState(hasContent)
 
   const handleBack = useCallback(() => {
@@ -174,7 +181,7 @@ export function GameView() {
         )}
         {currentGame.currentPhase === 'setup' && !placementActive && editingUnitId === null && (
           <button
-            onClick={() => setPlacementActive(true)}
+            onClick={() => (placingOrigin ? setEditingUnitId('new') : setPlacementActive(true))}
             className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
             title="Add unit"
           >
