@@ -84,10 +84,17 @@ function ArcGunsEditor({
   side,
   guns,
   onChange,
+  mirror,
 }: {
   side: ArcSide
   guns: GunProfile[]
   onChange: (guns: GunProfile[]) => void
+  /**
+   * The opposite broadside, when this arc has one. Ships almost always carry the
+   * same guns on both sides, so the second broadside is entered by copying the
+   * first rather than typing it twice.
+   */
+  mirror?: { side: ArcSide; guns: GunProfile[] }
 }) {
   const update = (index: number, patch: Partial<GunProfile>) =>
     onChange(guns.map((g, i) => (i === index ? { ...g, ...patch } : g)))
@@ -99,17 +106,39 @@ function ArcGunsEditor({
       ),
     )
 
+  // Copies take fresh ids: a profile is keyed by its id within its arc, and the
+  // two broadsides must stay editable independently once mirrored.
+  const copyFromMirror = () =>
+    mirror && onChange(mirror.guns.map((g) => ({ ...g, id: uuid(), ranges: { ...g.ranges } })))
+
   return (
     <div className="border border-gray-700/50 rounded-lg p-2">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-2">
         <span className="text-xs font-medium text-gray-300">{arcSideLabel(side)}</span>
-        <button
-          type="button"
-          onClick={() => onChange([...guns, newGunProfile()])}
-          className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer"
-        >
-          + Add guns
-        </button>
+        <div className="flex items-center gap-3">
+          {mirror && (
+            <button
+              type="button"
+              onClick={copyFromMirror}
+              disabled={mirror.guns.length === 0}
+              title={
+                mirror.guns.length === 0
+                  ? `Nothing bears on the ${arcSideLabel(mirror.side).toLowerCase()} arc to copy`
+                  : `Replace these guns with the ${arcSideLabel(mirror.side).toLowerCase()} layout`
+              }
+              className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer disabled:text-gray-600 disabled:cursor-not-allowed"
+            >
+              Copy from {arcSideLabel(mirror.side).toLowerCase()}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={() => onChange([...guns, newGunProfile()])}
+            className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer"
+          >
+            + Add guns
+          </button>
+        </div>
       </div>
 
       {guns.length === 0 ? (
@@ -535,14 +564,21 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
                   the move, to fire.
                 </p>
               </div>
-              {ARC_SIDES.map((arcSide) => (
-                <ArcGunsEditor
-                  key={arcSide}
-                  side={arcSide}
-                  guns={arcGuns[arcSide]}
-                  onChange={(guns) => setArcGuns((prev) => ({ ...prev, [arcSide]: guns }))}
-                />
-              ))}
+              {ARC_SIDES.map((arcSide) => {
+                // Port and starboard mirror each other; the bow and stern arcs
+                // have no counterpart worth copying.
+                const mirrorSide: ArcSide | undefined =
+                  arcSide === 'port' ? 'starboard' : arcSide === 'starboard' ? 'port' : undefined
+                return (
+                  <ArcGunsEditor
+                    key={arcSide}
+                    side={arcSide}
+                    guns={arcGuns[arcSide]}
+                    onChange={(guns) => setArcGuns((prev) => ({ ...prev, [arcSide]: guns }))}
+                    mirror={mirrorSide && { side: mirrorSide, guns: arcGuns[mirrorSide] }}
+                  />
+                )
+              })}
             </div>
           )}
 
