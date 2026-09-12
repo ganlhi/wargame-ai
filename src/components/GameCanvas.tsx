@@ -557,7 +557,9 @@ export function GameCanvas({
       if (!plan) return
       // The very walk that will resolve the move draws it, so the track shows
       // the sideways jog of every corner pivot exactly where it will happen.
-      const { path, poses } = applyMovementPlan(u, plan, currentGame.windDirection)
+      // The track follows the ship's reference point — the middle of her stern
+      // edge, the point a player measures her by — not the base centre.
+      const { path } = applyMovementPlan(u, plan, currentGame.windDirection)
       const track: Point[] = path.map((p) => worldToScreen(p.x, p.y, w, h))
 
       // A declared tack drifts from its first chunk, even though the ship is
@@ -580,8 +582,9 @@ export function GameCanvas({
       pathG.stroke({ color, width: 2, alpha: 0.6 })
       oc.addChild(pathG)
 
-      const end = poses[poses.length - 1]
-      const endPos = worldToScreen(end.x, end.y, w, h)
+      // The end marker sits on the same reference point the track was drawn
+      // through, so it lands where the stern will be measured to.
+      const endPos = track[track.length - 1]
       const dot = new Graphics()
       dot.circle(endPos.x, endPos.y, 4)
       dot.fill({ color, alpha: 0.8 })

@@ -149,7 +149,7 @@ Dropdowns use a custom control rather than a native `<select>`: a native one han
 
 All table information is entered by hand — there is no photo capture. With no table edges to align to and terrain reduced to primitives, a photograph has nothing left to anchor, so the setup flow is wind direction followed by typed terrain and unit descriptions.
 
-A ship's planned move is drawn on the map as a track from where she is to where she will be. A **solid** track means she is under way; a **dashed** one means she is making no way of her own and going where the wind takes her — in irons, or on a declared tack. Where a chunk ends in a turn the track jogs sideways through the pivot.
+A ship's planned move is drawn on the map as a track from where she is to where she will be. The track follows her **placement reference point** — the middle of the stern edge — rather than the base centre, so what is drawn is the path of the very point a player measures the model by, and the marker at its end sits exactly where the stern will be read off. A **solid** track means she is under way; a **dashed** one means she is making no way of her own and going where the wind takes her — in irons, or on a declared tack. Where a chunk ends in a turn the track jogs sideways through the pivot.
 
 Once the AI's orders are revealed, a **chunk slider** under the map scrubs the turn: the ships are drawn where they will stand at the end of the selected chunk (1 to 5, defaulting to 5, the end of the turn), and the panel lists every ship's stern position and heading for that chunk. Positions are measured from the origin entity *as it stands at that chunk*, which is what a player walking the models along the table measures against.
 

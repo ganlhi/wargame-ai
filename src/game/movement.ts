@@ -1,5 +1,6 @@
 import type { Attitude, Unit, MovementPlan, MoveChunk } from '../types'
 import { computeAttitude, windTowardPoint } from '../utils/attitude'
+import { sternMidpoint } from '../utils/coordinates'
 
 export const MOVEMENT_STEP = 5
 
@@ -255,9 +256,11 @@ export function applyMovementPlan(
   tackDirection: 'port' | 'starboard' | null
   distanceTraveled: number
   /**
-   * The track the base centre follows, for drawing. Where a chunk ends in a
-   * turn it holds both the point the ship arrived at and where the pivot left
-   * her, so the sideways jog of a corner pivot shows on the map.
+   * The track the ship's reference point — the middle of her stern edge —
+   * follows, for drawing. That is the point a player measures her by, so it is
+   * the one whose track reads directly against the table. Where a chunk ends
+   * in a turn it holds both the point the ship arrived at and where the pivot
+   * left her, so the sideways jog of a corner pivot shows on the map.
    */
   path: { x: number; y: number }[]
   /**
@@ -282,7 +285,6 @@ export function applyMovementPlan(
   let tackDirection =
     unit.tackDirection ?? (plan.isTack ? tackTurnDirection(unit.orientation, windAngle) : null)
   let distanceTraveled = 0
-  const path = [{ x: pose.x, y: pose.y }]
   const poses = [pose]
   const sweptPoses = [pose]
 
@@ -300,8 +302,6 @@ export function applyMovementPlan(
       distanceTraveled += chunk.distance
     }
 
-    path.push({ x: pose.x, y: pose.y })
-
     // The plan carries the turns in every case, tack included — a ship in irons
     // no longer swings by some separately-derived amount of its own. The turn
     // pivots the model on its rear corner, so it moves the centre as well as
@@ -309,7 +309,6 @@ export function applyMovementPlan(
     if (chunk.turn) {
       sweptPoses.push(pose)
       pose = pivotTurn(pose, chunk.turn.direction, chunk.turn.points, unit.baseWidth, unit.baseLength)
-      path.push({ x: pose.x, y: pose.y })
     }
 
     poses.push(pose)
@@ -343,7 +342,13 @@ export function applyMovementPlan(
     isInIrons,
     tackDirection,
     distanceTraveled: Math.round(distanceTraveled),
-    path: path.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
+    // The swept poses are exactly the stations the track passes through — the
+    // start, each arrival point on the old heading, and each post-pivot pose —
+    // and each carries the heading the stern point must be taken against.
+    path: sweptPoses.map((p) => {
+      const stern = sternMidpoint(p, p.orientation, unit.baseLength)
+      return { x: Math.round(stern.x), y: Math.round(stern.y) }
+    }),
     poses,
     sweptPoses,
   }

@@ -217,10 +217,15 @@ describe('applyMovementPlan', () => {
     expect(result.sweptPoses[1]).toEqual({ x: 100, y: 90, orientation: 0 })
     expect(result.sweptPoses[2]).toEqual(result.poses[1])
 
-    // The drawn track jogs through the pivot rather than cutting the corner.
+    // The drawn track follows the stern midpoint — the reference point a
+    // player measures the model by — and jogs through the pivot rather than
+    // cutting the corner. Bow north with an 80mm base puts the stern 40mm
+    // south of the centre; once the bow is east it is 40mm west of it.
     expect(result.path).toHaveLength(7)
-    expect(result.path[1]).toEqual({ x: 100, y: 90 })
-    expect(result.path[2]).toEqual({ x: 155, y: 115 })
+    expect(result.path[0]).toEqual({ x: 100, y: 140 })
+    expect(result.path[1]).toEqual({ x: 100, y: 130 })
+    expect(result.path[2]).toEqual({ x: 115, y: 115 })
+    expect(result.path[6]).toEqual({ x: 155, y: 115 })
   })
 
   it('drifts driftSpeed total per turn (split over 5 chunks) while in irons, with no forward distance', () => {
