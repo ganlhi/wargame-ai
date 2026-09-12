@@ -13,9 +13,11 @@ import type { ArcSide } from '../types'
 import { suggestMovement } from '../game/ai'
 import { originName } from '../utils/coordinates'
 import type { Unit } from '../types'
+import { saveGame } from '../sync/syncActions'
+import { DriveStatusBadge } from './DriveStatusBadge'
 
 export function GameView() {
-  const { currentGame, hasUnsavedChanges, saveCurrentGame, exitToMenu, setPhase, addUnit, updateUnit, startGame, revealOrders, resolveTurn } = useGameStore()
+  const { currentGame, hasUnsavedChanges, exitToMenu, setPhase, addUnit, updateUnit, startGame, revealOrders, resolveTurn } = useGameStore()
   const [showExitDialog, setShowExitDialog] = useState(false)
   const [editingTerrainId, setEditingTerrainId] = useState<string | null>(null)
   const [editingUnitId, setEditingUnitId] = useState<string | null>(null)
@@ -46,7 +48,7 @@ export function GameView() {
   }, [hasUnsavedChanges, exitToMenu])
 
   const handleSaveAndExit = () => {
-    saveCurrentGame()
+    saveGame()
     exitToMenu()
   }
 
@@ -143,10 +145,11 @@ export function GameView() {
             <h1 className="text-base font-semibold">{currentGame.name}</h1>
             <p className="text-xs text-gray-500">Setup</p>
           </div>
+          <DriveStatusBadge />
           {hasUnsavedChanges && (
             <span className="text-xs text-yellow-500 bg-yellow-500/10 px-2 py-1 rounded">Unsaved</span>
           )}
-          <button onClick={saveCurrentGame} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">
+          <button onClick={saveGame} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">
             Save
           </button>
         </header>
@@ -174,6 +177,7 @@ export function GameView() {
             {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}Wind &rarr; {COMPASS_LABELS[windTowardPoint(currentGame.windDirection)]} · Origin: {originName(currentGame) ?? 'none yet'} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
           </p>
         </div>
+        <DriveStatusBadge />
         {hasUnsavedChanges && (
           <span className="text-xs text-yellow-500 bg-yellow-500/10 px-2 py-1 rounded">Unsaved</span>
         )}
@@ -236,7 +240,7 @@ export function GameView() {
             Log
           </button>
         )}
-        <button onClick={saveCurrentGame} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">
+        <button onClick={saveGame} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">
           Save
         </button>
       </header>

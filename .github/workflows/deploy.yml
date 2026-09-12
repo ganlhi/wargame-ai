@@ -32,7 +32,13 @@ jobs:
       # Gate the deploy on the checks passing, so a broken build never ships.
       - run: npm run lint
       - run: npm test
+      # The Google OAuth client ID for Drive sync. A client ID is public, so it
+      # is a repository *variable* (Settings → Secrets and variables → Actions
+      # → Variables), not a secret. Leave it unset to ship without a default;
+      # players can still paste one into the app's Drive sync settings.
       - run: npm run build
+        env:
+          VITE_GOOGLE_CLIENT_ID: ${{ vars.VITE_GOOGLE_CLIENT_ID }}
 
       # enablement turns Pages on via the API if it is not already, so the very
       # first push works without having to flip the switch in Settings first.

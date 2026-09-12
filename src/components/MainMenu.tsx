@@ -1,8 +1,10 @@
 import { useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
+import { deleteGame } from '../sync/syncActions'
+import { DriveSyncPanel } from './DriveSyncPanel'
 
 export function MainMenu() {
-  const { savedGames, createGame, loadGame, deleteGame } = useGameStore()
+  const { savedGames, createGame, loadGame } = useGameStore()
   const [showNew, setShowNew] = useState(false)
   const [newName, setNewName] = useState('')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
@@ -27,6 +29,8 @@ export function MainMenu() {
       </header>
 
       <main className="flex-1 p-6 max-w-2xl mx-auto w-full">
+        <DriveSyncPanel />
+
         <div className="flex items-center justify-between mb-6">
           <h2 className="text-lg font-semibold">Saved Games</h2>
           <button
