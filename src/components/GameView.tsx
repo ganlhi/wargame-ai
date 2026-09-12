@@ -6,6 +6,7 @@ import { UnitFormModal } from './UnitFormModal'
 import { TerrainFormModal } from './TerrainFormModal'
 import { TerrainPanel } from './TerrainPanel'
 import { PlayerMovementPanel } from './PlayerMovementPanel'
+import { ChunkPreviewPanel } from './ChunkPreviewPanel'
 import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
 import { RANGE_BAND_LABELS, arcSideLabel } from '../types'
 import type { ArcSide } from '../types'
@@ -23,6 +24,9 @@ export function GameView() {
   const [showActionLog, setShowActionLog] = useState(false)
   const [showBases, setShowBases] = useState(false)
   const [expandedAIUnit, setExpandedAIUnit] = useState<string | null>(null)
+  // Which step of the turn the reveal shows. Remembered against the turn it
+  // was set on, so every new reveal opens back at the end of the move.
+  const [chunkPreview, setChunkPreview] = useState<{ turn: number; chunk: number } | null>(null)
   const hasContent = (currentGame?.terrain?.length ?? 0) > 0 || (currentGame?.units?.length ?? 0) > 0
   /**
    * Nothing on the table yet, so the next thing added becomes the origin and
@@ -98,6 +102,9 @@ export function GameView() {
   const showTerrainForm = editingTerrainId !== null
 
   if (!currentGame) return null
+
+  const previewChunk =
+    chunkPreview && chunkPreview.turn === currentGame.currentTurn ? chunkPreview.chunk : 5
 
   const exitDialog = showExitDialog && (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
@@ -241,7 +248,16 @@ export function GameView() {
           placementMode={placementActive}
           onTableClick={handleTableClick}
           showBases={showBases}
+          previewChunk={previewChunk}
         />
+        {currentGame.currentPhase === 'reveal' && (
+          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 pointer-events-none">
+            <ChunkPreviewPanel
+              chunk={previewChunk}
+              onChange={(chunk) => setChunkPreview({ turn: currentGame.currentTurn, chunk })}
+            />
+          </div>
+        )}
         {placementActive && (
           <div className="absolute inset-x-0 top-0 flex items-center justify-center pointer-events-none">
             <div className="bg-gray-900/90 border border-gray-700 rounded-b-lg px-4 py-2 flex items-center gap-3 pointer-events-auto backdrop-blur-sm">

@@ -79,6 +79,54 @@ export function orientationToVector(orientation: number): { dx: number; dy: numb
   return { dx: Math.cos(angle), dy: Math.sin(angle) }
 }
 
+/** Where a ship's base sits: its centre (what `Unit.position` stores) and heading. */
+export interface Pose {
+  x: number
+  y: number
+  orientation: number
+}
+
+/**
+ * The pose a ship ends up in after turning `points` to `direction`.
+ *
+ * A model is not spun about its middle: the rules pivot it on the **rear
+ * corner of the base on the side it turns to** — the stern-port corner for a
+ * turn to port, stern-starboard for one to starboard. That corner stays where
+ * it is and the rest of the base swings round it, so a turn carries the
+ * centre sideways and a little forward as well as changing the heading. With
+ * no base entered the corner *is* the centre and the ship simply spins.
+ */
+export function pivotTurn(
+  pose: Pose,
+  direction: 'port' | 'starboard',
+  points: number,
+  baseWidth: number,
+  baseLength: number,
+): Pose {
+  const side = direction === 'starboard' ? 1 : -1
+  const angle = (pose.orientation * Math.PI) / 16 - Math.PI / 2
+  // Forward (bow) unit vector and the perpendicular pointing to starboard.
+  const fx = Math.cos(angle)
+  const fy = Math.sin(angle)
+  const rx = -fy
+  const ry = fx
+  const pivotX = pose.x - fx * (baseLength / 2) + side * rx * (baseWidth / 2)
+  const pivotY = pose.y - fy * (baseLength / 2) + side * ry * (baseWidth / 2)
+
+  // Swing the centre about that corner. Orientation runs clockwise on the
+  // compass, which in this +y-South frame is a positive rotation.
+  const theta = (side * points * Math.PI) / 16
+  const cos = Math.cos(theta)
+  const sin = Math.sin(theta)
+  const dx = pose.x - pivotX
+  const dy = pose.y - pivotY
+  return {
+    x: pivotX + dx * cos - dy * sin,
+    y: pivotY + dx * sin + dy * cos,
+    orientation: (pose.orientation + side * points + 32) % 32,
+  }
+}
+
 /**
  * Unit vector a ship in irons drifts along: straight downwind, i.e. toward the
  * point the wind blows to. `windDirection` is the point it blows *from*, so
@@ -206,11 +254,27 @@ export function applyMovementPlan(
   isInIrons: boolean
   tackDirection: 'port' | 'starboard' | null
   distanceTraveled: number
+  /**
+   * The track the base centre follows, for drawing. Where a chunk ends in a
+   * turn it holds both the point the ship arrived at and where the pivot left
+   * her, so the sideways jog of a corner pivot shows on the map.
+   */
   path: { x: number; y: number }[]
-  poses: { x: number; y: number; orientation: number }[]
+  /**
+   * Six entries: the pose as the turn opens, then the pose at the end of each
+   * chunk *after* any turn taken there — what a player moving the model chunk
+   * by chunk would see on the table at each step.
+   */
+  poses: Pose[]
+  /**
+   * Every pose the base occupies during the move, in order: the start, each
+   * chunk's arrival point on the old heading, and each post-pivot pose. This
+   * is what collision checks must sweep — the base sits on the arrival point
+   * before it swings, and on the pivoted one after.
+   */
+  sweptPoses: Pose[]
 } {
-  let { x, y } = unit.position
-  let orientation = unit.orientation
+  let pose: Pose = { x: unit.position.x, y: unit.position.y, orientation: unit.orientation }
   // A tack is under way from the moment it is declared, so the ship already
   // carries no way on during the turn it first swings up into the wind — even
   // though it begins that turn still beating.
@@ -218,39 +282,41 @@ export function applyMovementPlan(
   let tackDirection =
     unit.tackDirection ?? (plan.isTack ? tackTurnDirection(unit.orientation, windAngle) : null)
   let distanceTraveled = 0
-  const path = [{ x, y }]
-  const poses = [{ x, y, orientation }]
+  const path = [{ x: pose.x, y: pose.y }]
+  const poses = [pose]
+  const sweptPoses = [pose]
 
   for (const chunk of plan.chunks) {
     if (isInIrons) {
       const drift = driftVector(windAngle)
       // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
       const driftPerChunk = (unit.driftSpeed ?? 10) / 5
-      x += drift.dx * driftPerChunk
-      y += drift.dy * driftPerChunk
+      pose = { ...pose, x: pose.x + drift.dx * driftPerChunk, y: pose.y + drift.dy * driftPerChunk }
     } else {
-      const vec = orientationToVector(orientation)
-      const nextX = x + vec.dx * chunk.distance
-      const nextY = y + vec.dy * chunk.distance
-      distanceTraveled += Math.hypot(nextX - x, nextY - y)
-      x = nextX
-      y = nextY
+      const vec = orientationToVector(pose.orientation)
+      pose = { ...pose, x: pose.x + vec.dx * chunk.distance, y: pose.y + vec.dy * chunk.distance }
+      // Only way made under sail counts toward next turn's minimum; the small
+      // displacement of a pivot is not distance sailed.
+      distanceTraveled += chunk.distance
     }
 
-    path.push({ x, y })
-    // Heading used while travelling this segment (the turn, if any, applies
-    // only after arriving here), so the pose reflects where the base actually
-    // sat during the move.
-    poses.push({ x, y, orientation })
+    path.push({ x: pose.x, y: pose.y })
 
     // The plan carries the turns in every case, tack included — a ship in irons
-    // no longer swings by some separately-derived amount of its own.
+    // no longer swings by some separately-derived amount of its own. The turn
+    // pivots the model on its rear corner, so it moves the centre as well as
+    // the heading; the base sits on the arrival point before it swings.
     if (chunk.turn) {
-      const dir = chunk.turn.direction === 'port' ? -1 : 1
-      orientation = (orientation + dir * chunk.turn.points + 32) % 32
+      sweptPoses.push(pose)
+      pose = pivotTurn(pose, chunk.turn.direction, chunk.turn.points, unit.baseWidth, unit.baseLength)
+      path.push({ x: pose.x, y: pose.y })
     }
+
+    poses.push(pose)
+    sweptPoses.push(pose)
   }
 
+  const { x, y, orientation } = pose
   const attitude = computeAttitude(windAngle, orientation, unit.foreAndAftRigged)
 
   if (tackDirection) {
@@ -279,7 +345,47 @@ export function applyMovementPlan(
     distanceTraveled: Math.round(distanceTraveled),
     path: path.map((p) => ({ x: Math.round(p.x), y: Math.round(p.y) })),
     poses,
+    sweptPoses,
   }
+}
+
+/**
+ * The order a ship will actually carry out this turn: the one entered for her,
+ * or, mid-tack with nothing entered, the continuation the rules force on her.
+ * A destroyed or surrendered ship is a wreck on the table and goes nowhere,
+ * whatever order she may still be carrying.
+ */
+export function turnOrderFor(unit: Unit, windDirection: number): MovementPlan | null {
+  if (unit.status === 'destroyed' || unit.status === 'surrendered') return null
+  return (
+    (unit.side === 'ai' ? unit.hiddenAIOrder : unit.playerOrder) ??
+    (unit.isInIrons ? buildTackPlan(unit, windDirection) : null)
+  )
+}
+
+/**
+ * The pose a ship is in as the turn opens and at the end of each of the five
+ * chunks, following her order for the turn. A ship with no order holds her
+ * pose throughout.
+ */
+export function turnPosesFor(unit: Unit, windDirection: number): Pose[] {
+  const plan = turnOrderFor(unit, windDirection)
+  if (!plan) {
+    const still: Pose = { x: unit.position.x, y: unit.position.y, orientation: unit.orientation }
+    return Array.from({ length: 6 }, () => still)
+  }
+  return applyMovementPlan(unit, plan, windDirection).poses
+}
+
+/**
+ * Every unit as it will stand at the end of `chunk` (0 = as the turn opens,
+ * 5 = the end of the turn), for previewing the orders on the map.
+ */
+export function unitsAtChunk(units: Unit[], windDirection: number, chunk: number): Unit[] {
+  return units.map((u) => {
+    const pose = turnPosesFor(u, windDirection)[Math.max(0, Math.min(5, chunk))]
+    return { ...u, position: { x: pose.x, y: pose.y }, orientation: pose.orientation }
+  })
 }
 
 /**

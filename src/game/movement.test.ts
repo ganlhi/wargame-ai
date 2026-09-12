@@ -7,6 +7,7 @@ import {
   splitMovement,
   computeEffectiveMaxSpeed,
   orientationToVector,
+  pivotTurn,
   applyMovementPlan,
   enumerateMovementPlans,
   minMoveDistance,
@@ -14,9 +15,14 @@ import {
   normaliseSpeedMultiplier,
   speedMultiplierFromPercent,
   speedMultiplierToPercent,
+  turnOrderFor,
+  turnPosesFor,
+  unitsAtChunk,
 } from './movement'
+import type { Pose } from './movement'
 import type { Unit, MovementPlan, MoveChunk, Attitude, SpeedRange } from '../types'
 import { computeAttitude } from '../utils/attitude'
+import { baseCorners } from '../utils/geometry'
 
 const SPEED_PROFILE: Record<Attitude, SpeedRange> = {
   in_irons: { max: 0 },
@@ -113,6 +119,43 @@ describe('orientationToVector', () => {
   })
 })
 
+describe('pivotTurn', () => {
+  const approx = (p: { x: number; y: number }) => ({ x: Math.round(p.x), y: Math.round(p.y) })
+  // baseCorners lists bow-starboard, bow-port, stern-port, stern-starboard.
+  const rearCorner = (pose: Pose, side: 'port' | 'starboard', w: number, l: number) =>
+    baseCorners(pose, pose.orientation, w, l)[side === 'port' ? 2 : 3]
+
+  it('pivots on the rear corner of the base on the side of the turn', () => {
+    // A model is turned about its stern-port corner to port and its
+    // stern-starboard corner to starboard: that corner does not move at all.
+    for (const side of ['port', 'starboard'] as const) {
+      for (const orientation of [0, 3, 8, 13, 21, 30]) {
+        for (const points of [1, 4, 8]) {
+          const before: Pose = { x: 120, y: -45, orientation }
+          const after = pivotTurn(before, side, points, 30, 80)
+          expect(approx(rearCorner(after, side, 30, 80))).toEqual(approx(rearCorner(before, side, 30, 80)))
+          expect(after.orientation).toBe((orientation + (side === 'port' ? -points : points) + 32) % 32)
+        }
+      }
+    }
+  })
+
+  it('carries the centre sideways and forward as the base swings round', () => {
+    // Heading north at the origin on a 30×80 base, 8 points to starboard: the
+    // stern-starboard corner is at (15, 40); swinging the centre a quarter turn
+    // clockwise about it lands the base heading east, centred at (55, 25).
+    const after = pivotTurn({ x: 0, y: 0, orientation: 0 }, 'starboard', 8, 30, 80)
+    expect(approx(after)).toEqual({ x: 55, y: 25 })
+    expect(after.orientation).toBe(8)
+  })
+
+  it('spins in place when the ship has no base entered', () => {
+    const after = pivotTurn({ x: 10, y: 20, orientation: 4 }, 'port', 3, 0, 0)
+    expect(approx(after)).toEqual({ x: 10, y: 20 })
+    expect(after.orientation).toBe(1)
+  })
+})
+
 describe('applyMovementPlan', () => {
   it('moves straight along the heading and reports distance travelled', () => {
     const unit = makeUnit({ position: { x: 100, y: 100 }, orientation: 8 })
@@ -145,8 +188,39 @@ describe('applyMovementPlan', () => {
     // wind=16 keeps both headings clear of "in irons".
     const result = applyMovementPlan(unit, plan(chunks, 8), 16)
     expect(result.orientation).toBe(8)
-    expect(result.position).toEqual({ x: 140, y: 90 })
+    // 10mm north to (100, 90); the 30×80 base then pivots a quarter turn about
+    // its stern-starboard corner at (115, 130), which carries the centre to
+    // (155, 115); then 40mm east.
+    expect(result.position).toEqual({ x: 195, y: 115 })
+    // The pivot's displacement is not way made: only the 50mm sailed counts.
     expect(result.distanceTraveled).toBe(50)
+  })
+
+  it('reports the pose at the end of every chunk, and every pose the base sat on', () => {
+    const unit = makeUnit({ position: { x: 100, y: 100 }, orientation: 0 })
+    const chunks: MoveChunk[] = [
+      { distance: 10, turn: { direction: 'starboard', points: 8 } },
+      { distance: 10 }, { distance: 10 }, { distance: 10 }, { distance: 10 },
+    ]
+    const result = applyMovementPlan(unit, plan(chunks, 8), 16)
+
+    // Six poses: the start, then the end of each chunk after its turn.
+    expect(result.poses).toHaveLength(6)
+    expect(result.poses[0]).toEqual({ x: 100, y: 100, orientation: 0 })
+    expect(result.poses[1].orientation).toBe(8)
+    expect({ x: Math.round(result.poses[1].x), y: Math.round(result.poses[1].y) }).toEqual({ x: 155, y: 115 })
+    expect({ x: Math.round(result.poses[5].x), y: Math.round(result.poses[5].y) }).toEqual(result.position)
+
+    // The swept set also holds the arrival point on the old heading, since the
+    // base sits there before it swings — a collision check must see both.
+    expect(result.sweptPoses).toHaveLength(7)
+    expect(result.sweptPoses[1]).toEqual({ x: 100, y: 90, orientation: 0 })
+    expect(result.sweptPoses[2]).toEqual(result.poses[1])
+
+    // The drawn track jogs through the pivot rather than cutting the corner.
+    expect(result.path).toHaveLength(7)
+    expect(result.path[1]).toEqual({ x: 100, y: 90 })
+    expect(result.path[2]).toEqual({ x: 155, y: 115 })
   })
 
   it('drifts driftSpeed total per turn (split over 5 chunks) while in irons, with no forward distance', () => {
@@ -253,6 +327,10 @@ describe('tacking procedure', () => {
   // Wind from the north (0). Orientation 6 (ENE) is 6 points off it, with the
   // wind on the port bow — beating for a square rig, and the shallowest angle
   // one can hold. Coming about therefore swings to port, through 12 points.
+  //
+  // No base is entered, so each swing pivots on the centre itself and only the
+  // drift moves the ship: the drift figures below are then exact. The corner
+  // pivot has its own tests.
   const beating = (o: Partial<Unit> = {}) =>
     makeUnit({
       orientation: 6,
@@ -260,6 +338,8 @@ describe('tacking procedure', () => {
       prevAttitude: 'beating',
       maxTurnPoints: 6,
       driftSpeed: 50,
+      baseWidth: 0,
+      baseLength: 0,
       ...o,
     })
 
@@ -327,6 +407,19 @@ describe('tacking procedure', () => {
       // Wind from the north blows toward the south: the full 50mm of drift.
       expect(result.position).toEqual({ x: 0, y: 50 })
       expect(result.distanceTraveled).toBe(0)
+    })
+
+    it('pivots on the rear corner while coming about, just like any other turn', () => {
+      // The model is turned the same way whether or not she has way on, so a
+      // tacking ship's stern-port corner (she swings to port) only moves by the
+      // drift between one swing and the next.
+      const unit = beating({ position: { x: 0, y: 0 }, maxTurnPoints: 2, driftSpeed: 0, baseWidth: 30, baseLength: 80 })
+      const result = applyMovementPlan(unit, buildTackPlan(unit, 0), 0)
+      const cornerBefore = baseCorners(unit.position, unit.orientation, 30, 80)[2]
+      const cornerAfter = baseCorners(result.poses[5], result.orientation, 30, 80)[2]
+      expect(Math.round(cornerAfter.x)).toBe(Math.round(cornerBefore.x))
+      expect(Math.round(cornerAfter.y)).toBe(Math.round(cornerBefore.y))
+      expect(result.position).not.toEqual({ x: 0, y: 0 })
     })
 
     it('leaves the ship in irons, still swinging the same way, when one turn is not enough', () => {
@@ -412,6 +505,55 @@ describe('tacking procedure', () => {
         expect(applyMovementPlan(unit, plan, 0).attitude).not.toBe('in_irons')
       }
     })
+  })
+})
+
+describe('previewing a turn chunk by chunk', () => {
+  const order = (chunks: MoveChunk[]): MovementPlan => plan(chunks, 0)
+
+  it('uses the order a ship will actually carry out', () => {
+    const wind = 16
+    const ai = makeUnit({ side: 'ai', hiddenAIOrder: order(straight(10)) })
+    const player = makeUnit({ side: 'player', playerOrder: order(straight(10)) })
+    expect(turnOrderFor(ai, wind)).toBe(ai.hiddenAIOrder)
+    expect(turnOrderFor(player, wind)).toBe(player.playerOrder)
+    // Mid-tack with nothing entered, the forced continuation stands in.
+    const tacking = makeUnit({ orientation: 2, isInIrons: true, tackDirection: 'port' })
+    expect(turnOrderFor(tacking, 0)?.isTack).toBe(true)
+    // A wreck goes nowhere, whatever it still carries.
+    const wreck = makeUnit({ side: 'player', status: 'destroyed', playerOrder: order(straight(10)) })
+    expect(turnOrderFor(wreck, wind)).toBeNull()
+  })
+
+  it('holds a ship with no order where she is for the whole turn', () => {
+    const unit = makeUnit({ position: { x: 40, y: 60 }, orientation: 8 })
+    const poses = turnPosesFor(unit, 16)
+    expect(poses).toHaveLength(6)
+    for (const p of poses) expect(p).toEqual({ x: 40, y: 60, orientation: 8 })
+  })
+
+  it('places every ship at the end of the chosen chunk, finishing where the move resolves', () => {
+    const mover = makeUnit({
+      id: 'm', side: 'player', position: { x: 0, y: 0 }, orientation: 8,
+      playerOrder: order([
+        { distance: 10, turn: { direction: 'port', points: 2 } },
+        { distance: 10 }, { distance: 10 }, { distance: 10 }, { distance: 10 },
+      ]),
+    })
+    const still = makeUnit({ id: 's', position: { x: 300, y: 0 }, orientation: 16 })
+
+    const atStart = unitsAtChunk([mover, still], 16, 0)
+    expect(atStart[0].position).toEqual({ x: 0, y: 0 })
+    expect(atStart[0].orientation).toBe(8)
+
+    const afterFirst = unitsAtChunk([mover, still], 16, 1)
+    expect(afterFirst[0].orientation).toBe(6)
+    expect(afterFirst[1].position).toEqual({ x: 300, y: 0 })
+
+    const atEnd = unitsAtChunk([mover, still], 16, 5)
+    const resolved = applyMovementPlan(mover, mover.playerOrder!, 16)
+    expect({ x: Math.round(atEnd[0].position.x), y: Math.round(atEnd[0].position.y) }).toEqual(resolved.position)
+    expect(atEnd[0].orientation).toBe(resolved.orientation)
   })
 })
 

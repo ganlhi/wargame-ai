@@ -577,7 +577,7 @@ export function suggestMovement(
     const newState = applyMovementPlan(unit, plan, windDirection)
     // Reject the plan if the base touches another ship at any point along the
     // swept path (waypoints), not just at the final resting pose.
-    planCollides.push(newState.poses.some(poseCollides))
+    planCollides.push(newState.sweptPoses.some(poseCollides))
     const testUnit: Unit = { ...unit, ...newState, attitude: newState.attitude }
     let score = evaluatePosition(testUnit, enemies, terrain)
     if (plan.isTack) {
@@ -592,9 +592,17 @@ export function suggestMovement(
       }
     }
 
+    // How far the ship went, and which way. A turn pivots the base on its rear
+    // corner, so the centre can shift a base-length or so without any way
+    // being made; that shift is real and evaluatePosition already prices the
+    // position it produces, but the terms below reward *sailing* toward or
+    // away from the enemy, so they weigh the distance actually sailed. Left
+    // on the raw displacement they would pay an aggressive ship to crawl a
+    // few millimetres and swing hard, just for the sideways slide.
     const dx = newState.position.x - unit.position.x
     const dy = newState.position.y - unit.position.y
-    const moveDist = Math.sqrt(dx * dx + dy * dy)
+    const displacement = Math.sqrt(dx * dx + dy * dy)
+    const moveDist = newState.distanceTraveled
 
     if (enemies.length > 0) {
       const nearestEnemy = enemies.reduce((a, b) =>
@@ -603,9 +611,9 @@ export function suggestMovement(
       const toEnemyX = nearestEnemy.position.x - unit.position.x
       const toEnemyY = nearestEnemy.position.y - unit.position.y
 
-      if (moveDist > 0) {
+      if (moveDist > 0 && displacement > 0) {
         const toEnemyDist = Math.sqrt(toEnemyX * toEnemyX + toEnemyY * toEnemyY)
-        const dot = (dx * toEnemyX + dy * toEnemyY) / (moveDist * toEnemyDist)
+        const dot = (dx * toEnemyX + dy * toEnemyY) / (displacement * toEnemyDist)
 
         if (unit.aiStyle === 'defensive') {
           const curDist = distance(unit.position, nearestEnemy.position)

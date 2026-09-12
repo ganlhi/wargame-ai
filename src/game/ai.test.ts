@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   evaluatePosition, suggestMovement, decideAggressiveAction, basesWithinGrapple, scoreTack,
 } from './ai'
-import { applyMovementPlan } from './movement'
+import { applyMovementPlan, projectTackCompletion } from './movement'
 import { computeAIFirePlan } from './combat'
 import { centerFromSternMidpoint } from '../utils/coordinates'
 import { computeAttitude } from '../utils/attitude'
@@ -358,8 +358,9 @@ describe('tacking as an AI choice', () => {
 
   // Wind from the north. Orientation 6 is beating with the wind on the port
   // bow; coming about swings 12 points to port, so a ship with 6 turn points
-  // takes two turns and finishes at (0, 40) heading 26 (WNW), drifting 20mm a
-  // turn. Its port broadside then bears SSW, its starboard NNE.
+  // takes two turns and finishes heading 26 (WNW), drifting 20mm a turn and
+  // pivoting on her stern-port corner each time she swings. Its port broadside
+  // then bears SSW, its starboard NNE.
   const beatingAI = (overrides: Partial<Unit> = {}) =>
     makeUnit({
       aiStyle: 'aggressive',
@@ -373,8 +374,11 @@ describe('tacking as an AI choice', () => {
       ...overrides,
     })
 
+  /** Where the tack leaves `unit`: enemies are placed relative to that pose. */
+  const tackEnd = (unit = beatingAI()) => projectTackCompletion(unit, 0).position
+
   /** An enemy `range` mm away on the given bearing, measured from `from`. */
-  const enemyOnBearing = (bearingPoint: number, range: number, from = { x: 0, y: 40 }) => {
+  const enemyOnBearing = (bearingPoint: number, range: number, from = tackEnd()) => {
     const angle = (bearingPoint * Math.PI) / 16 - Math.PI / 2
     return makeUnit({
       id: 'e1',
@@ -391,7 +395,10 @@ describe('tacking as an AI choice', () => {
 
   it('comes about when the tack puts a broadside on an enemy at short range', () => {
     const unit = beatingAI()
-    const enemy = enemyOnBearing(18, 90) // SSW: the port broadside
+    // SSW of where the tack ends: the port broadside, inside the close band
+    // (65mm for these guns). At medium range the tack no longer pays enough to
+    // beat sailing on, and the AI rightly keeps her way.
+    const enemy = enemyOnBearing(18, 60)
     const plan = suggestMovement(unit, [unit, enemy], [], 0, 'beating')
     expect(plan?.isTack).toBe(true)
     // A tack is a tack: no way on at all.
@@ -435,18 +442,24 @@ describe('tacking as an AI choice', () => {
 
     it('pays nothing for drifting onto terrain', () => {
       const shoal: TableTerrain = {
-        id: 't1', type: 'shoal', center: { x: 0, y: 40 },
+        id: 't1', type: 'shoal', center: tackEnd(),
         shape: { kind: 'circle', width: 120, height: 120, rotation: 0 },
       }
       expect(score(enemyOnBearing(18, 90), beatingAI(), [shoal])).toBe(0)
     })
 
     it('discounts a tack that takes longer to come round', () => {
-      // No drift in either case, so both finish in the same place and the only
-      // difference is how many turns the swing takes: 2 against 6.
-      const enemy = enemyOnBearing(18, 90, { x: 0, y: 0 })
-      const quick = score(enemy, beatingAI({ maxTurnPoints: 6, driftSpeed: 0 }))
-      const slow = score(enemy, beatingAI({ maxTurnPoints: 2, driftSpeed: 0 }))
+      // No drift in either case. Every swing pivots on the same stern-port
+      // corner, so however the 12 points are split both finish in the same
+      // place and the only difference is how many turns it takes: 2 against 6.
+      const quickShip = beatingAI({ maxTurnPoints: 6, driftSpeed: 0 })
+      const slowShip = beatingAI({ maxTurnPoints: 2, driftSpeed: 0 })
+      // (Each turn's position is rounded to the millimetre, so allow for that.)
+      expect(tackEnd(slowShip).x).toBeCloseTo(tackEnd(quickShip).x, -1)
+      expect(tackEnd(slowShip).y).toBeCloseTo(tackEnd(quickShip).y, -1)
+      const enemy = enemyOnBearing(18, 90, tackEnd(quickShip))
+      const quick = score(enemy, quickShip)
+      const slow = score(enemy, slowShip)
       expect(slow).toBeGreaterThan(0)
       expect(slow).toBeLessThan(quick)
     })
@@ -470,7 +483,7 @@ describe('tacking as an AI choice', () => {
     const shoal: TableTerrain = {
       id: 't1',
       type: 'shoal',
-      center: { x: 0, y: 40 }, // exactly where the tack would leave her
+      center: tackEnd(), // exactly where the tack would leave her
       shape: { kind: 'circle', width: 120, height: 120, rotation: 0 },
     }
     const plan = suggestMovement(unit, [unit, enemy], [shoal], 0, 'beating')

@@ -6,7 +6,7 @@ import { TERRAIN_COLORS, TERRAIN_TYPE_OPTIONS } from '../utils/terrainStyles'
 import type { GameState, TerrainType, UnitStatus } from '../types'
 import { arcMaxRange, arcSideToAngles } from '../types'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
-import { orientationToVector, driftVector } from '../game/movement'
+import { applyMovementPlan, turnOrderFor, unitsAtChunk } from '../game/movement'
 import type { Point } from '../utils/geometry'
 import { terrainPolygon } from '../utils/geometry'
 import { dashSegments } from '../utils/dashedPath'
@@ -55,6 +55,11 @@ interface GameCanvasProps {
   placementMode?: boolean
   onTableClick?: (worldX: number, worldY: number) => void
   showBases?: boolean
+  /**
+   * During the reveal, which step of the turn the ships are drawn at: 0 = as
+   * the turn opens, 1–5 = the end of that chunk. Ignored in every other phase.
+   */
+  previewChunk?: number
 }
 
 export function GameCanvas({
@@ -63,6 +68,7 @@ export function GameCanvas({
   placementMode = false,
   onTableClick,
   showBases = false,
+  previewChunk = 5,
 }: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
@@ -399,12 +405,20 @@ export function GameCanvas({
 
     const { scale } = viewportFor(w, h)
 
+    // Once the orders are on the table the ships are drawn where they will
+    // stand at the previewed step of the turn, so the player can walk the
+    // models along chunk by chunk. Everywhere else they sit where they are.
+    const units =
+      currentGame.currentPhase === 'reveal'
+        ? unitsAtChunk(currentGame.units, currentGame.windDirection, previewChunk)
+        : currentGame.units
+
     // Grapple link lines, drawn first so the ship icons sit on top. One line per
     // pair (dedup via sorted id key) connecting the two grappled units.
     const drawnLinks = new Set<string>()
-    for (const u of currentGame.units) {
+    for (const u of units) {
       if (!u.grappledWith) continue
-      const partner = currentGame.units.find((p) => p.id === u.grappledWith)
+      const partner = units.find((p) => p.id === u.grappledWith)
       if (!partner) continue
       const key = [u.id, partner.id].sort().join('|')
       if (drawnLinks.has(key)) continue
@@ -418,7 +432,7 @@ export function GameCanvas({
       uc.addChild(link)
     }
 
-    for (const u of currentGame.units) {
+    for (const u of units) {
       const pos = worldToScreen(u.position.x, u.position.y, w, h)
       const container = new Container()
       container.x = pos.x
@@ -480,7 +494,7 @@ export function GameCanvas({
       container.addChild(g)
       uc.addChild(container)
     }
-  }, [currentGame, worldToScreen, viewportFor, selectedUnitId, showBases])
+  }, [currentGame, worldToScreen, viewportFor, selectedUnitId, showBases, previewChunk])
 
   const renderOverlay = useCallback(() => {
     const oc = overlayContainerRef.current
@@ -541,34 +555,14 @@ export function GameCanvas({
 
     const drawPlanPath = (u: typeof currentGame.units[number], plan: typeof u.hiddenAIOrder, color: number) => {
       if (!plan) return
-      const startPos = worldToScreen(u.position.x, u.position.y, w, h)
-      let ox = u.orientation
-      let px = u.position.x
-      let py = u.position.y
+      // The very walk that will resolve the move draws it, so the track shows
+      // the sideways jog of every corner pivot exactly where it will happen.
+      const { path, poses } = applyMovementPlan(u, plan, currentGame.windDirection)
+      const track: Point[] = path.map((p) => worldToScreen(p.x, p.y, w, h))
 
       // A declared tack drifts from its first chunk, even though the ship is
       // still beating as the turn opens.
       const drifting = u.isInIrons || !!plan.isTack
-      const track: Point[] = [startPos]
-
-      for (const chunk of plan.chunks) {
-        if (drifting) {
-          const drift = driftVector(currentGame.windDirection)
-          // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
-          const driftPerChunk = (u.driftSpeed ?? 10) / 5
-          px += drift.dx * driftPerChunk
-          py += drift.dy * driftPerChunk
-        } else {
-          const vecAngle = (ox * Math.PI / 16) - Math.PI / 2
-          px += Math.cos(vecAngle) * chunk.distance
-          py += Math.sin(vecAngle) * chunk.distance
-        }
-        track.push(worldToScreen(px, py, w, h))
-
-        if (chunk.turn) {
-          ox = (ox + (chunk.turn.direction === 'starboard' ? chunk.turn.points : -chunk.turn.points) + 32) % 32
-        }
-      }
 
       // A ship under way is drawn with a solid track; one making no way of its
       // own and going where the wind takes it is dashed, so the two read apart
@@ -586,7 +580,8 @@ export function GameCanvas({
       pathG.stroke({ color, width: 2, alpha: 0.6 })
       oc.addChild(pathG)
 
-      const endPos = worldToScreen(px, py, w, h)
+      const end = poses[poses.length - 1]
+      const endPos = worldToScreen(end.x, end.y, w, h)
       const dot = new Graphics()
       dot.circle(endPos.x, endPos.y, 4)
       dot.fill({ color, alpha: 0.8 })
@@ -604,25 +599,17 @@ export function GameCanvas({
 
     const selectedUnit = currentGame.units.find((u) => u.id === selectedUnitId)
     if (selectedUnit && selectedUnit.firingArcs.length > 0 && selectedUnit.hiddenAIFirePlan) {
-      const plan = selectedUnit.hiddenAIOrder
+      const plan = turnOrderFor(selectedUnit, currentGame.windDirection)
       const firePlan = selectedUnit.hiddenAIFirePlan
 
       if (plan && firePlan) {
-        const pos = { ...selectedUnit.position }
-        let orient = selectedUnit.orientation
-        for (let ci = 0; ci <= firePlan.chunkIndex && ci < plan.chunks.length; ci++) {
-          const chunk = plan.chunks[ci]
-          const vec = orientationToVector(orient)
-          pos.x += vec.dx * chunk.distance
-          pos.y += vec.dy * chunk.distance
-          if (chunk.turn) {
-            const dir = chunk.turn.direction === 'port' ? -1 : 1
-            orient = (orient + dir * chunk.turn.points + 32) % 32
-          }
-        }
+        // The shot is taken from the pose at the end of the firing chunk —
+        // the same pose the fire plan was computed against.
+        const { poses } = applyMovementPlan(selectedUnit, plan, currentGame.windDirection)
+        const firing = poses[Math.min(firePlan.chunkIndex + 1, poses.length - 1)]
 
-        const firingPos = worldToScreen(pos.x, pos.y, w, h)
-        const firingOrientDeg = orient * 360 / 32
+        const firingPos = worldToScreen(firing.x, firing.y, w, h)
+        const firingOrientDeg = firing.orientation * 360 / 32
         const arc = selectedUnit.firingArcs.find((a) => a.side === firePlan.arcSide)
         if (arc) {
           const a = arcSideToAngles(arc.side)

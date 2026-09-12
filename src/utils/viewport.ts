@@ -1,7 +1,7 @@
 import type { GameState } from '../types'
 import type { Point } from './geometry'
 import { baseCorners, terrainPolygon } from './geometry'
-import { driftVector, orientationToVector } from '../game/movement'
+import { applyMovementPlan, turnOrderFor } from '../game/movement'
 
 /**
  * Mapping between world millimetres and screen pixels: `screen = world * scale
@@ -53,29 +53,15 @@ export function contentPoints(game: GameState): Point[] {
       pts.push(u.position)
     }
 
-    const plan = u.hiddenAIOrder ?? u.playerOrder
+    const plan = turnOrderFor(u, game.windDirection)
     if (!plan) continue
-    // A declared tack drifts from its first chunk, even though the ship is
-    // still beating as the turn opens.
-    const drifting = u.isInIrons || !!plan.isTack
-    let orient = u.orientation
-    let p = { ...u.position }
-    for (const chunk of plan.chunks) {
-      if (drifting) {
-        const drift = driftVector(game.windDirection)
-        p = {
-          x: p.x + drift.dx * ((u.driftSpeed ?? 10) / 5),
-          y: p.y + drift.dy * ((u.driftSpeed ?? 10) / 5),
-        }
-      } else {
-        const vec = orientationToVector(orient)
-        p = { x: p.x + vec.dx * chunk.distance, y: p.y + vec.dy * chunk.distance }
-      }
-      pts.push(p)
-      if (chunk.turn) {
-        const dir = chunk.turn.direction === 'starboard' ? chunk.turn.points : -chunk.turn.points
-        orient = (orient + dir + 32) % 32
-      }
+    // The same walk that resolves the move draws it, pivots and drift included.
+    const { path, poses } = applyMovementPlan(u, plan, game.windDirection)
+    pts.push(...path)
+    // The base at the end of the move too, so a previewed ship is never cut off.
+    const end = poses[poses.length - 1]
+    if (u.baseWidth > 0 && u.baseLength > 0) {
+      pts.push(...baseCorners(end, end.orientation, u.baseWidth, u.baseLength))
     }
   }
 

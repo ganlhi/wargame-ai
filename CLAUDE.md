@@ -64,7 +64,9 @@ The minimum is measured against the ship's base maximum for its point of sail, s
 
 The selected movement distance is split as evenly as possible in 5 chunks. The ship is allowed to turn port or starboard up to two times during the movement phase, at the end of a chunk. For instance it can move, turn, move, move, turn, move, move. 
 
-Turning is done in "points", knowing that a full 360 degrees circle is divided into 32 points (so 1 point = 11.25 degrees). Each ship has a maximum number of points per game round it can turn. For instance a 4th rate ship can turn 6 points, so it could, during its movement phase, turn 2 points then 4 points, for a total of 6 points; or turn 6 points in one go. It can also turn less than the maximum allowed.
+Turning is done in "points", knowing that a full 360 degrees circle is divided into 32 points (so 1 point = 11.25 degrees). Each ship has a maximum number of points per game round it can turn.
+
+A turn is made the way the model is turned on the table: the ship **pivots about the rear corner of its base on the side it turns to** — the stern-port corner for a turn to port, the stern-starboard corner for a turn to starboard. That corner stays put and the rest of the base swings round it, so a turn shifts the ship's centre sideways and a little forward as well as changing its heading. This applies to every turn, including the swings of a declared tack. The displacement of a pivot is not distance sailed: it does not count toward the next turn's minimum move. For instance a 4th rate ship can turn 6 points, so it could, during its movement phase, turn 2 points then 4 points, for a total of 6 points; or turn 6 points in one go. It can also turn less than the maximum allowed.
 
 When deciding how many points the ship will turn, it's important to note that each point will reduce the max speed by 5%. The movement panel shows the current min and max, with the max updating live as turn points are added to the plan. For instance, if a ship is able to move maximum 100mm straight ahead, without turning, if it decides to turn 5 points (in one go or split into two turns), then its maximum speed becomes 75mm (to be split in 5 chunks of 15mm).
 
@@ -147,6 +149,8 @@ Dropdowns use a custom control rather than a native `<select>`: a native one han
 
 All table information is entered by hand — there is no photo capture. With no table edges to align to and terrain reduced to primitives, a photograph has nothing left to anchor, so the setup flow is wind direction followed by typed terrain and unit descriptions.
 
-A ship's planned move is drawn on the map as a track from where she is to where she will be. A **solid** track means she is under way; a **dashed** one means she is making no way of her own and going where the wind takes her — in irons, or on a declared tack.
+A ship's planned move is drawn on the map as a track from where she is to where she will be. A **solid** track means she is under way; a **dashed** one means she is making no way of her own and going where the wind takes her — in irons, or on a declared tack. Where a chunk ends in a turn the track jogs sideways through the pivot.
+
+Once the AI's orders are revealed, a **chunk slider** under the map scrubs the turn: the ships are drawn where they will stand at the end of the selected chunk (1 to 5, defaulting to 5, the end of the turn), and the panel lists every ship's stern position and heading for that chunk. Positions are measured from the origin entity *as it stands at that chunk*, which is what a player walking the models along the table measures against.
 
 The battlefield view has no fixed extent to draw: it frames whatever is currently in play (ships, their bases, terrain and previewed movement paths), rescaling as the action spreads out or closes up. The player can take over that view at any time — drag empty water to pan, scroll or pinch to zoom, or use the on-screen controls — and a **Fit** button hands it back to following the action automatically. 

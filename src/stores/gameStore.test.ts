@@ -216,9 +216,15 @@ describe('gameStore — tacking', () => {
     return store().currentGame!.units[0]
   }
 
-  /** Wind from the north; orientation 6 is beating with the wind on the port bow. */
+  /**
+   * Wind from the north; orientation 6 is beating with the wind on the port
+   * bow. No base is entered, so each swing pivots on the centre and only the
+   * drift moves her — which keeps the drift figures below exact.
+   */
   const setUpBeatingShip = (overrides: Partial<Unit> = {}) => {
-    store().addUnit(makeUnit('u1', { orientation: 6, maxTurnPoints: 2, driftSpeed: 50, ...overrides }))
+    store().addUnit(makeUnit('u1', {
+      orientation: 6, maxTurnPoints: 2, driftSpeed: 50, baseWidth: 0, baseLength: 0, ...overrides,
+    }))
     store().setWindDirection(0)
     store().startGame()
     return store().currentGame!.units[0]

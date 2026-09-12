@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { v4 as uuid } from 'uuid'
 import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry, MovementPlan } from '../types'
-import { applyMovementPlan, buildTackPlan } from '../game/movement'
+import { applyMovementPlan, turnOrderFor } from '../game/movement'
 import { suggestMovement, decideAggressiveAction } from '../game/ai'
 import { computeAIFirePlan } from '../game/combat'
 import { applyGrapple, clearGrappleForRemoved } from '../game/grapple'
@@ -399,10 +399,10 @@ export const useGameStore = create<GameStore>()(
           const u = units[i]
           // A ship mid-tack has no choice in the matter, so the continuation
           // stands in for a missing order rather than leaving her frozen head
-          // to wind: the rules say she keeps swinging and keeps drifting.
-          const plan =
-            (u.side === 'ai' ? u.hiddenAIOrder : u.playerOrder) ??
-            (u.isInIrons ? buildTackPlan(u, game.windDirection) : null)
+          // to wind: the rules say she keeps swinging and keeps drifting. The
+          // same routine feeds the chunk-by-chunk preview, so what the player
+          // saw during the reveal is exactly what resolves here.
+          const plan = turnOrderFor(u, game.windDirection)
           if (!plan) continue
 
           const result = applyMovementPlan(u, plan, game.windDirection)

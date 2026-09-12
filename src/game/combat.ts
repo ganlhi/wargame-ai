@@ -14,7 +14,7 @@ export interface FiringResult {
   effectiveGuns: number
 }
 
-import { orientationToVector, driftVector } from './movement'
+import { applyMovementPlan } from './movement'
 
 export function checkFiringArc(firer: Unit, target: Unit): FiringResult {
   const dist = distance(firer.position, target.position)
@@ -49,40 +49,6 @@ export function checkFiringArc(firer: Unit, target: Unit): FiringResult {
     inArc: false, isBroadside: false, isRaking: false, dist,
     arcSide: null, band: null, effectiveGuns: 0,
   }
-}
-
-function simulateChunk(
-  pos: { x: number; y: number },
-  orientation: number,
-  isInIrons: boolean,
-  chunk: { distance: number; turn?: { direction: 'port' | 'starboard'; points: number } },
-  windDirection: number,
-  driftSpeed: number,
-): { position: { x: number; y: number }; orientation: number } {
-  let { x, y } = pos
-  let orient = orientation
-
-  if (isInIrons) {
-    const drift = driftVector(windDirection)
-    // driftSpeed is the total drift for a whole turn, split across the 5 chunks.
-    const driftPerChunk = driftSpeed / 5
-    x += drift.dx * driftPerChunk
-    y += drift.dy * driftPerChunk
-  } else {
-    const vec = orientationToVector(orient)
-    x += vec.dx * chunk.distance
-    y += vec.dy * chunk.distance
-  }
-
-  // Every turn, tack included, is carried by the plan itself, so there is no
-  // separate in-irons swing to re-derive here. A tack resolves only at the end
-  // of a turn, so drifting-or-sailing does not change part-way through.
-  if (chunk.turn) {
-    const dir = chunk.turn.direction === 'port' ? -1 : 1
-    orient = (orient + dir * chunk.turn.points + 32) % 32
-  }
-
-  return { position: { x, y }, orientation: orient }
 }
 
 interface Candidate extends FirePlan {
@@ -146,9 +112,21 @@ export function computeAIFirePlan(
     return out
   }
 
-  let aiPos = aiUnit.position
-  let aiOrient = aiUnit.orientation
+  // Both sides are walked by the one movement routine, so the shot is judged
+  // from exactly where each base will sit — corner pivots included — at the
+  // end of every chunk. Every turn, tack included, is carried by the plan
+  // itself; a tack resolves only at the end of a turn, so drifting-or-sailing
+  // does not change part-way through.
   const aiIrons = aiUnit.isInIrons || !!aiPlan.isTack
+  const aiPoses = applyMovementPlan(aiUnit, aiPlan, windDirection).poses
+
+  const players = allUnits
+    .filter((pu) => pu.side === 'player' && pu.status !== 'destroyed' && pu.status !== 'surrendered')
+    .map((pu) => ({
+      unit: pu,
+      isInIrons: pu.isInIrons || !!pu.playerOrder?.isTack,
+      poses: pu.playerOrder ? applyMovementPlan(pu, pu.playerOrder, windDirection).poses : null,
+    }))
 
   const candidates: Candidate[] = []
   // Range to each target as the move ends, so a shot can be judged against
@@ -156,30 +134,15 @@ export function computeAIFirePlan(
   const finalRange = new Map<string, number>()
 
   for (let ci = 0; ci < aiPlan.chunks.length; ci++) {
-    const chunk = aiPlan.chunks[ci]
-    const result = simulateChunk(aiPos, aiOrient, aiIrons, chunk, windDirection, aiUnit.driftSpeed)
-    aiPos = result.position
-    aiOrient = result.orientation
+    // poses[0] is the opening pose, so the end of chunk ci is poses[ci + 1].
+    const aiPose = aiPoses[ci + 1]
+    const aiPos = { x: aiPose.x, y: aiPose.y }
+    const simulatedAI: Unit = { ...aiUnit, position: aiPos, orientation: aiPose.orientation, isInIrons: aiIrons }
 
-    const simulatedAI: Unit = { ...aiUnit, position: aiPos, orientation: aiOrient, isInIrons: aiIrons }
-
-    for (const pu of allUnits) {
-      if (pu.side !== 'player' || pu.status === 'destroyed' || pu.status === 'surrendered') continue
-      const puPlan = pu.playerOrder
-
-      let puPos = pu.position
-      let puOrient = pu.orientation
-      const puIrons = pu.isInIrons || !!puPlan?.isTack
-
-      if (puPlan) {
-        for (let pci = 0; pci <= ci; pci++) {
-          const puResult = simulateChunk(puPos, puOrient, puIrons, puPlan.chunks[pci], windDirection, pu.driftSpeed)
-          puPos = puResult.position
-          puOrient = puResult.orientation
-        }
-      }
-
-      const simulatedPU: Unit = { ...pu, position: puPos, orientation: puOrient, isInIrons: puIrons }
+    for (const { unit: pu, isInIrons: puIrons, poses } of players) {
+      const puPose = poses ? poses[ci + 1] : { x: pu.position.x, y: pu.position.y, orientation: pu.orientation }
+      const puPos = { x: puPose.x, y: puPose.y }
+      const simulatedPU: Unit = { ...pu, position: puPos, orientation: puPose.orientation, isInIrons: puIrons }
       finalRange.set(pu.id, distance(aiPos, puPos))
       candidates.push(...shotsAt(simulatedAI, simulatedPU, ci))
     }
