@@ -3,16 +3,13 @@ import { v4 as uuid } from 'uuid'
 import { useGameStore } from '../stores/gameStore'
 import { useShipTemplateStore } from '../stores/shipTemplateStore'
 import { deleteShipTemplate, saveShipTemplate } from '../sync/syncActions'
-import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS, SAILING_ATTITUDES } from '../utils/attitude'
-import { ARC_SIDES, RANGE_BANDS, RANGE_BAND_LABELS, RANGE_BAND_MODIFIERS, arcSideLabel } from '../types'
-import type {
-  Unit, UnitSide, AIStyle, UnitStatus, ArcSide, Attitude, SpeedRange, GunProfile, RangeBand,
-  FiringArc, ShipSettings, ShipTemplate,
-} from '../types'
-import { speedMultiplierFromPercent, speedMultiplierToPercent } from '../game/movement'
+import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
+import type { Unit, UnitSide, AIStyle, UnitStatus, ShipSettings, ShipTemplate } from '../types'
 import { cloneShipSettings, findTemplateByName } from '../utils/shipTemplates'
 import { OffsetInput } from './OffsetInput'
 import { Select } from './Select'
+import { GunsFields, ShipSettingsFields } from './ShipSettingsFields'
+import { draftFromSettings, settingsFromDraft } from '../utils/shipSettingsDraft'
 import {
   centerFromSternMidpoint, fromOffset, originName, originPoint, sternMidpoint, toOffset,
 } from '../utils/coordinates'
@@ -70,167 +67,11 @@ function OrientationSlider({
   )
 }
 
-function newGunProfile(): GunProfile {
-  return {
-    id: uuid(),
-    name: 'Guns',
-    guns: 10,
-    ranges: { close: 100, medium: 200, long: 300, extreme: 400 },
-  }
-}
-
-/**
- * The guns in one arc. A ship rarely has a uniform broadside — long guns on the
- * gun deck, carronades above — and each kind reaches its own four distances, so
- * an arc is a list rather than a single range and count.
- */
-function ArcGunsEditor({
-  side,
-  guns,
-  onChange,
-  mirror,
-}: {
-  side: ArcSide
-  guns: GunProfile[]
-  onChange: (guns: GunProfile[]) => void
-  /**
-   * The opposite broadside, when this arc has one. Ships almost always carry the
-   * same guns on both sides, so the second broadside is entered by copying the
-   * first rather than typing it twice.
-   */
-  mirror?: { side: ArcSide; guns: GunProfile[] }
-}) {
-  const update = (index: number, patch: Partial<GunProfile>) =>
-    onChange(guns.map((g, i) => (i === index ? { ...g, ...patch } : g)))
-
-  const updateRange = (index: number, band: RangeBand, value: number) =>
-    onChange(
-      guns.map((g, i) =>
-        i === index ? { ...g, ranges: { ...g.ranges, [band]: Math.max(0, value) } } : g,
-      ),
-    )
-
-  // Copies take fresh ids: a profile is keyed by its id within its arc, and the
-  // two broadsides must stay editable independently once mirrored.
-  const copyFromMirror = () =>
-    mirror && onChange(mirror.guns.map((g) => ({ ...g, id: uuid(), ranges: { ...g.ranges } })))
-
-  return (
-    <div className="border border-gray-700/50 rounded-lg p-2">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs font-medium text-gray-300">{arcSideLabel(side)}</span>
-        <div className="flex items-center gap-3">
-          {mirror && (
-            <button
-              type="button"
-              onClick={copyFromMirror}
-              disabled={mirror.guns.length === 0}
-              title={
-                mirror.guns.length === 0
-                  ? `Nothing bears on the ${arcSideLabel(mirror.side).toLowerCase()} arc to copy`
-                  : `Replace these guns with the ${arcSideLabel(mirror.side).toLowerCase()} layout`
-              }
-              className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer disabled:text-gray-600 disabled:cursor-not-allowed"
-            >
-              Copy from {arcSideLabel(mirror.side).toLowerCase()}
-            </button>
-          )}
-          <button
-            type="button"
-            onClick={() => onChange([...guns, newGunProfile()])}
-            className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer"
-          >
-            + Add guns
-          </button>
-        </div>
-      </div>
-
-      {guns.length === 0 ? (
-        <p className="text-xs text-gray-600 italic mt-1">Nothing bears on this arc.</p>
-      ) : (
-        <div className="space-y-2 mt-2">
-          {guns.map((profile, i) => {
-            // The bands have to widen outwards or the inner one swallows the
-            // next: a shot falls in the first band whose distance it is within.
-            const ascending = RANGE_BANDS.every(
-              (band, bi) => bi === 0 || profile.ranges[band] >= profile.ranges[RANGE_BANDS[bi - 1]],
-            )
-            return (
-              <div key={profile.id} className="bg-gray-900/60 rounded p-2">
-                <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={profile.name}
-                    onChange={(e) => update(i, { name: e.target.value })}
-                    placeholder="24pdr"
-                    className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                  <input
-                    type="number"
-                    min={0}
-                    value={profile.guns}
-                    onChange={(e) => update(i, { guns: Math.max(0, Number(e.target.value)) })}
-                    className="w-12 bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                  />
-                  <span className="text-xs text-gray-500">guns</span>
-                  <button
-                    type="button"
-                    onClick={() => onChange(guns.filter((_, gi) => gi !== i))}
-                    aria-label={`Remove ${profile.name || 'guns'} from the ${arcSideLabel(side).toLowerCase()} arc`}
-                    className="text-gray-500 hover:text-red-400 px-1 cursor-pointer"
-                  >
-                    ×
-                  </button>
-                </div>
-                <div className="grid grid-cols-4 gap-1 mt-1.5">
-                  {RANGE_BANDS.map((band) => (
-                    <label key={band} className="flex flex-col gap-0.5">
-                      <span className="text-[10px] text-gray-500">
-                        {RANGE_BAND_LABELS[band]}
-                        {band !== 'close' && ` ×${RANGE_BAND_MODIFIERS[band]}`}
-                      </span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={profile.ranges[band]}
-                        onChange={(e) => updateRange(i, band, Number(e.target.value))}
-                        className="w-full bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                    </label>
-                  ))}
-                </div>
-                {!ascending && (
-                  <p className="text-xs text-amber-500 mt-1">
-                    Ranges should grow outwards; a band shorter than the one inside it never applies.
-                  </p>
-                )}
-              </div>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
-
-/**
- * The arcs a ship actually carries: any side whose guns amount to nothing is
- * left out. Arc ids are kept from `existing` where the side already had one.
- */
-function firingArcsFrom(arcGuns: Record<ArcSide, GunProfile[]>, existing: FiringArc[]): FiringArc[] {
-  return (Object.entries(arcGuns) as [ArcSide, GunProfile[]][])
-    .filter(([, guns]) => guns.some((g) => g.guns > 0 && g.ranges.extreme > 0))
-    .map(([side, guns]) => ({
-      id: existing.find((a) => a.side === side)?.id ?? uuid(),
-      side,
-      guns,
-    }))
-}
-
 /**
  * The library of saved ships, from inside the unit form: import one to fill
  * the settings in instead of typing them, or save what is on the form now
- * under a name so the next ship of her class is a single pick.
+ * under a name so the next ship of her class is a single pick. The library
+ * itself is managed from the home page.
  */
 function SavedShipsSection({
   shipName,
@@ -396,31 +237,8 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
   const [orientation, setOrientation] = useState(unit?.orientation ?? 0)
   const [status, setStatus] = useState<UnitStatus>(unit?.status ?? 'active')
   const [aiStyle, setAiStyle] = useState<AIStyle>(unit?.aiStyle ?? 'cautious')
-  const [maxTurnPoints, setMaxTurnPoints] = useState(unit?.maxTurnPoints ?? 6)
-  const [foreAndAftRigged, setForeAndAftRigged] = useState(unit?.foreAndAftRigged ?? false)
-  const [arcGuns, setArcGuns] = useState<Record<ArcSide, GunProfile[]>>(() => {
-    const result: Record<ArcSide, GunProfile[]> = { bow: [], stern: [], port: [], starboard: [] }
-    for (const a of unit?.firingArcs ?? []) {
-      result[a.side] = a.guns
-    }
-    return result
-  })
-  const defaultProfile: Record<Attitude, SpeedRange> = {
-    // A ship head to wind makes no way of her own — she drifts, at the speed
-    // below — so this is always 0 and is not offered for editing.
-    in_irons: { max: 0 },
-    beating: { max: 60 },
-    reaching: { max: 100 },
-    quarter_reaching: { max: 120 },
-    running: { max: 110 },
-  }
-  const [driftSpeed, setDriftSpeed] = useState(unit?.driftSpeed ?? 10)
-  const [baseWidth, setBaseWidth] = useState(unit?.baseWidth ?? 30)
-  const [baseLength, setBaseLength] = useState(unit?.baseLength ?? 80)
-  const [speedPercent, setSpeedPercent] = useState(() => speedMultiplierToPercent(unit?.speedMultiplier))
-  const [speedProfile, setSpeedProfile] = useState<Record<Attitude, SpeedRange>>(
-    unit?.speedProfile ?? defaultProfile,
-  )
+  // Everything that is the ship's own — what a saved ship holds — in one draft.
+  const [draft, setDraft] = useState(() => draftFromSettings(unit))
 
   const origin = currentGame ? originPoint(currentGame) : { x: 0, y: 0 }
   const anchorName = currentGame ? originName(currentGame) : null
@@ -441,37 +259,15 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
     return { east: 0, south: 0 }
   })
 
-  const computedAttitude = computeAttitude(windDirection, orientation, foreAndAftRigged)
-  const bestSpeed = Math.max(...SAILING_ATTITUDES.map((a) => speedProfile[a].max))
-
-  // Everything on the form that is the ship's own — what a template holds.
-  const currentSettings: ShipSettings = {
-    maxTurnPoints,
-    foreAndAftRigged,
-    speedProfile,
-    speedMultiplier: speedMultiplierFromPercent(speedPercent),
-    driftSpeed,
-    baseWidth,
-    baseLength,
-    firingArcs: firingArcsFrom(arcGuns, unit?.firingArcs ?? []),
-  }
+  const computedAttitude = computeAttitude(windDirection, orientation, draft.foreAndAftRigged)
+  const currentSettings = settingsFromDraft(draft, unit?.firingArcs ?? [])
 
   // Fill the form from a saved ship. A blank name takes the template's, so a
   // new ship of a named class is one pick away; a ship already named keeps
   // hers, since importing a class is not renaming her.
   const importTemplate = (template: ShipTemplate) => {
-    const settings = cloneShipSettings(template)
     if (!name.trim()) setName(template.name)
-    setMaxTurnPoints(settings.maxTurnPoints)
-    setForeAndAftRigged(settings.foreAndAftRigged)
-    setSpeedProfile(settings.speedProfile)
-    setSpeedPercent(speedMultiplierToPercent(settings.speedMultiplier))
-    setDriftSpeed(settings.driftSpeed)
-    setBaseWidth(settings.baseWidth)
-    setBaseLength(settings.baseLength)
-    const guns: Record<ArcSide, GunProfile[]> = { bow: [], stern: [], port: [], starboard: [] }
-    for (const arc of settings.firingArcs) guns[arc.side] = arc.guns
-    setArcGuns(guns)
+    setDraft(draftFromSettings(cloneShipSettings(template)))
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -481,7 +277,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       isFirstEntity || isOrigin
         ? (unit ? sternMidpoint(unit.position, unit.orientation, unit.baseLength) : { x: 0, y: 0 })
         : fromOffset(offset, origin)
-    const center = centerFromSternMidpoint(reference, orientation, baseLength)
+    const center = centerFromSternMidpoint(reference, orientation, currentSettings.baseLength)
     onSave({
       id: unit?.id ?? uuid(),
       name: name.trim(),
@@ -490,19 +286,10 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       orientation,
       status,
       aiStyle: side === 'ai' ? aiStyle : 'cautious',
-      maxTurnPoints,
-      foreAndAftRigged,
-      // In irons is never a sailing speed, whatever an older save may hold.
-      speedProfile: { ...speedProfile, in_irons: { max: 0 } },
-      speedMultiplier: speedMultiplierFromPercent(speedPercent),
-      driftSpeed,
-      baseWidth,
-      baseLength,
-
       // Gun layouts are only entered for AI ships — the player rolls their own
       // fire — but anything already on the unit is kept, so flipping a ship to
       // the player's side and back does not throw its armament away.
-      firingArcs: currentSettings.firingArcs,
+      ...currentSettings,
       attitude: computedAttitude,
       prevAttitude: computedAttitude,
       // No movement phase resolved yet: this turn's minimum comes from half
@@ -582,10 +369,10 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
           </div>
 
           <OrientationSlider
-            key={`${unit?.id ?? 'new'}-${foreAndAftRigged}`}
+            key={`${unit?.id ?? 'new'}-${draft.foreAndAftRigged}`}
             initial={orientation}
             windDir={windDirection}
-            foreAndAftRigged={foreAndAftRigged}
+            foreAndAftRigged={draft.foreAndAftRigged}
             onChange={(v) => setOrientation(v)}
           />
 
@@ -623,157 +410,10 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
             </div>
           )}
 
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Max Turn Points</label>
-            <input
-              type="number"
-              min={0}
-              max={32}
-              value={maxTurnPoints}
-              onChange={(e) => setMaxTurnPoints(Number(e.target.value))}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs text-gray-400 mb-1.5">Rig</label>
-            <div className="flex gap-2">
-              {([false, true] as const).map((foreAft) => (
-                <button
-                  key={String(foreAft)}
-                  type="button"
-                  onClick={() => setForeAndAftRigged(foreAft)}
-                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
-                    foreAndAftRigged === foreAft
-                      ? 'bg-blue-600 text-white'
-                      : 'bg-gray-800 text-gray-400 border border-gray-700'
-                  }`}
-                >
-                  {foreAft ? 'Fore & Aft' : 'Square'}
-                </button>
-              ))}
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              {foreAndAftRigged
-                ? 'Points higher: in irons to 4 points off the wind, beating from 5.'
-                : 'In irons to 5 points off the wind, beating from 6.'}
-            </p>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Base Width (mm)</label>
-              <input
-                type="number"
-                min={0}
-                value={baseWidth}
-                onChange={(e) => setBaseWidth(Math.max(0, Number(e.target.value)))}
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-            <div>
-              <label className="block text-xs text-gray-400 mb-1">Base Length (mm)</label>
-              <input
-                type="number"
-                min={0}
-                value={baseLength}
-                onChange={(e) => setBaseLength(Math.max(0, Number(e.target.value)))}
-                className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-            </div>
-          </div>
-          <p className="text-xs text-gray-500 -mt-1.5">Footprint of the model's base. The AI won't let its base overlap another ship's.</p>
-
-          <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
-            <div className="text-xs text-gray-400 font-medium mb-2">Max Speed per Attitude (mm/turn)</div>
-            <div className="space-y-1.5">
-              {SAILING_ATTITUDES.map((att) => (
-                <div key={att} className="grid grid-cols-3 gap-1 items-center">
-                  <span className="text-xs text-gray-300">{ATTITUDE_LABELS[att]}</span>
-                  <input
-                    type="number"
-                    min={0}
-                    value={speedProfile[att].max}
-                    onChange={(e) =>
-                      setSpeedProfile((prev) => ({
-                        ...prev,
-                        [att]: { max: Math.max(0, Number(e.target.value)) },
-                      }))
-                    }
-                    className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                    placeholder="Max"
-                  />
-                  <span className="text-xs text-gray-500">mm</span>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-gray-500 mt-2">
-              Best to worst. In irons is not listed: head to wind a ship carries no way of her own
-              and drifts instead, at the speed below.
-            </p>
-            <div className="grid grid-cols-3 gap-1 items-center mt-2 pt-2 border-t border-gray-700/50">
-              <span className="text-xs text-gray-300">Multiplier</span>
-              <input
-                type="number"
-                min={0}
-                step={1}
-                value={speedPercent}
-                onChange={(e) => setSpeedPercent(Math.max(0, Math.round(Number(e.target.value))))}
-                className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-              />
-              <span className="text-xs text-gray-500">%</span>
-            </div>
-            <p className="text-xs text-gray-500 mt-1">
-              Scales every figure above &mdash; 100% as entered, less for a ship shortened down,
-              more for one under full sail. Her best point of sail comes out at{' '}
-              <span className="text-gray-300">
-                {Math.round((bestSpeed * speedPercent) / 100)}mm
-              </span>
-              .
-            </p>
-          </div>
-
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Drift Speed (mm/chunk, when in irons)</label>
-            <input
-              type="number"
-              min={0}
-              value={driftSpeed}
-              onChange={(e) => setDriftSpeed(Math.max(0, Number(e.target.value)))}
-              className="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-            />
-          </div>
+          <ShipSettingsFields draft={draft} onChange={setDraft} />
 
           {side === 'ai' && (
-            <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50 space-y-3">
-              <div>
-                <div className="text-xs text-gray-400 font-medium">Guns</div>
-                <p className="text-xs text-gray-500 mt-0.5">
-                  An arc can carry several kinds of gun, each reaching its own distances. Past close
-                  range a shot is worth a fraction of itself &mdash;{' '}
-                  {RANGE_BANDS.filter((b) => b !== 'close')
-                    .map((b) => `${RANGE_BAND_LABELS[b].toLowerCase()} ×${RANGE_BAND_MODIFIERS[b]}`)
-                    .join(', ')}{' '}
-                  &mdash; which is what the AI weighs a shot by when it decides whether, and when in
-                  the move, to fire.
-                </p>
-              </div>
-              {ARC_SIDES.map((arcSide) => {
-                // Port and starboard mirror each other; the bow and stern arcs
-                // have no counterpart worth copying.
-                const mirrorSide: ArcSide | undefined =
-                  arcSide === 'port' ? 'starboard' : arcSide === 'starboard' ? 'port' : undefined
-                return (
-                  <ArcGunsEditor
-                    key={arcSide}
-                    side={arcSide}
-                    guns={arcGuns[arcSide]}
-                    onChange={(guns) => setArcGuns((prev) => ({ ...prev, [arcSide]: guns }))}
-                    mirror={mirrorSide && { side: mirrorSide, guns: arcGuns[mirrorSide] }}
-                  />
-                )
-              })}
-            </div>
+            <GunsFields arcGuns={draft.arcGuns} onChange={(arcGuns) => setDraft({ ...draft, arcGuns })} />
           )}
 
           <div className="flex gap-2 pt-2">

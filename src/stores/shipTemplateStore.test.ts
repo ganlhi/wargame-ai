@@ -69,6 +69,17 @@ describe('ship template store', () => {
     expect(templates[0].name).toBe('frigate')
   })
 
+  it('edits a template by id, so renaming it does not touch a namesake or leave the old entry behind', () => {
+    const store = useShipTemplateStore.getState()
+    const frigate = store.saveTemplate('Frigate', settings({ baseLength: 80 }))
+    store.saveTemplate('Sloop', settings())
+    const renamed = store.saveTemplate('Heavy frigate', settings({ baseLength: 95 }), frigate.id)
+    const { templates } = useShipTemplateStore.getState()
+    expect(renamed.id).toBe(frigate.id)
+    expect(templates.map((t) => t.name)).toEqual(['Heavy frigate', 'Sloop'])
+    expect(templates[0].baseLength).toBe(95)
+  })
+
   it('pins in irons to 0 and copies rather than shares the settings it is given', () => {
     const source = settings({ speedProfile: { ...settings().speedProfile, in_irons: { max: 25 } } })
     const saved = useShipTemplateStore.getState().saveTemplate('Brig', source)

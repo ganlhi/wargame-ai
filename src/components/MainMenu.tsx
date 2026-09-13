@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
 import { deleteGame } from '../sync/syncActions'
 import { DriveSyncPanel } from './DriveSyncPanel'
+import { SavedShipsPanel } from './SavedShipsPanel'
 
 export function MainMenu() {
   const { savedGames, createGame, loadGame } = useGameStore()
@@ -130,6 +131,8 @@ export function MainMenu() {
             ))}
           </ul>
         )}
+
+        <SavedShipsPanel />
       </main>
     </div>
   )

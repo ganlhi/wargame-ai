@@ -13,11 +13,12 @@ interface ShipTemplateStore {
   templates: ShipTemplate[]
 
   /**
-   * Save settings under a name. A template already bearing that name (ignoring
-   * case and surrounding space) is updated in place, keeping its id; otherwise
-   * a new one is added. Returns the template as saved.
+   * Save settings under a name. With an `id`, that template is updated —
+   * renamed if the name differs. Without one, a template already bearing the
+   * name (ignoring case and surrounding space) is updated in place, keeping
+   * its id; otherwise a new one is added. Returns the template as saved.
    */
-  saveTemplate: (name: string, settings: ShipSettings) => ShipTemplate
+  saveTemplate: (name: string, settings: ShipSettings, id?: string) => ShipTemplate
   removeTemplate: (id: string) => void
   /** Adopt a whole library, as when Drive is the source of truth. */
   replaceAll: (templates: ShipTemplate[]) => void
@@ -28,10 +29,12 @@ export const useShipTemplateStore = create<ShipTemplateStore>()(
     (set, get) => ({
       templates: [],
 
-      saveTemplate: (name, settings) => {
+      saveTemplate: (name, settings, id) => {
         const trimmed = name.trim()
         const timestamp = new Date().toISOString()
-        const existing = findTemplateByName(get().templates, trimmed)
+        const existing = id
+          ? get().templates.find((t) => t.id === id)
+          : findTemplateByName(get().templates, trimmed)
         const template: ShipTemplate = {
           id: existing?.id ?? uuid(),
           name: trimmed,

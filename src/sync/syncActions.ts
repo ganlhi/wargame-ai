@@ -134,9 +134,9 @@ export function deleteGame(id: string): void {
   void run('push', (s) => s.deleteGame(id, savedGames))
 }
 
-/** Save a ship's settings to the library here, then mirror the whole library to Drive. */
-export function saveShipTemplate(name: string, settings: ShipSettings): ShipTemplate {
-  const template = useShipTemplateStore.getState().saveTemplate(name, settings)
+/** Save a ship's settings to the library here, then mirror the whole library to Drive. See the store for what `id` does. */
+export function saveShipTemplate(name: string, settings: ShipSettings, id?: string): ShipTemplate {
+  const template = useShipTemplateStore.getState().saveTemplate(name, settings, id)
   pushTemplates()
   return template
 }
