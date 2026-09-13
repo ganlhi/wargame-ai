@@ -65,6 +65,17 @@ export function minMoveDistance(prevMoveDistance: number | null, baseMaxSpeed: n
   return (prevMoveDistance ?? baseMaxSpeed) / 2
 }
 
+/**
+ * How far a plan carries the ship under sail over the whole turn — the sum of
+ * its chunks. A ship making no way of her own (a declared tack, or one already
+ * in irons) sails nothing whatever her chunks say: she drifts instead, by her
+ * drift speed, which is reported separately.
+ */
+export function planSailedDistance(plan: MovementPlan, inIrons = false): number {
+  if (plan.isTack || inIrons) return 0
+  return Math.round(plan.chunks.reduce((sum, c) => sum + c.distance, 0))
+}
+
 export function splitMovement(distance: number): [number, number, number, number, number] {
   const base = Math.floor(distance / 5)
   const remainder = distance % 5

@@ -11,6 +11,7 @@ import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
 import { RANGE_BAND_LABELS, arcSideLabel } from '../types'
 import type { ArcSide } from '../types'
 import { suggestMovement } from '../game/ai'
+import { planSailedDistance } from '../game/movement'
 import { originName } from '../utils/coordinates'
 import type { Unit } from '../types'
 import { saveGame } from '../sync/syncActions'
@@ -308,6 +309,31 @@ export function GameView() {
                         </p>
                       )
                     })()}
+                    {aiUnit.hiddenAIOrder && (() => {
+                      // The whole turn's move at a glance, before the chunk-by-
+                      // chunk detail: what the player will measure out in total.
+                      const order = aiUnit.hiddenAIOrder
+                      const drifting = !!order.isTack || aiUnit.isInIrons
+                      const sailed = planSailedDistance(order, aiUnit.isInIrons)
+                      return (
+                        <p className="text-xs text-gray-400 mt-1">
+                          {drifting ? (
+                            <>
+                              <span className="text-amber-400">Drifting</span> {aiUnit.driftSpeed}mm downwind, no way on
+                            </>
+                          ) : (
+                            <>
+                              Moves <span className="text-gray-200 font-medium">{sailed}mm</span>
+                            </>
+                          )}
+                          {order.totalTurnPoints > 0 && (
+                            <span className="text-gray-500">
+                              {' '}· turns {order.totalTurnPoints} pt{order.totalTurnPoints === 1 ? '' : 's'}
+                            </span>
+                          )}
+                        </p>
+                      )
+                    })()}
                     {expandedAIUnit === aiUnit.id && (aiUnit.hiddenAIOrder || aiUnit.hiddenAIFirePlan) && (
                       <div className="mt-2 text-xs text-gray-400 space-y-1">
                         {aiUnit.hiddenAIOrder && (<>
@@ -318,7 +344,10 @@ export function GameView() {
                             {i > 0 && ' → '}
                             {Math.round(c.distance)}mm{c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}
                           </span>
-                        ))}</p>
+                        ))}
+                        {!aiUnit.hiddenAIOrder.isTack && !aiUnit.isInIrons && (
+                          <span className="text-gray-400"> = {planSailedDistance(aiUnit.hiddenAIOrder)}mm</span>
+                        )}</p>
                         </>)}
                         {aiUnit.hiddenAIFirePlan && (() => {
                           const target = currentGame.units.find(u => u.id === aiUnit.hiddenAIFirePlan!.targetId)

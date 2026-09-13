@@ -11,6 +11,7 @@ import {
   applyMovementPlan,
   enumerateMovementPlans,
   minMoveDistance,
+  planSailedDistance,
   topSpeed,
   normaliseSpeedMultiplier,
   speedMultiplierFromPercent,
@@ -90,6 +91,19 @@ describe('splitMovement', () => {
       expect(chunks).toHaveLength(5)
       expect(chunks.reduce((a, b) => a + b, 0)).toBe(d)
     }
+  })
+})
+
+describe('planSailedDistance', () => {
+  it('adds the chunks up, matching what applyMovementPlan reports as sailed', () => {
+    const p = plan([{ distance: 17 }, { distance: 17, turn: { direction: 'port', points: 2 } }, { distance: 17 }, { distance: 16 }, { distance: 16 }], 2)
+    expect(planSailedDistance(p)).toBe(83)
+    expect(applyMovementPlan(makeUnit(), p, 0).distanceTraveled).toBe(83)
+  })
+
+  it('is 0 for a ship making no way of her own — a declared tack, or one already in irons', () => {
+    expect(planSailedDistance({ ...plan(straight(10)), isTack: true })).toBe(0)
+    expect(planSailedDistance(plan(straight(10)), true)).toBe(0)
   })
 })
 

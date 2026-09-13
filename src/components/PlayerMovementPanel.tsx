@@ -4,6 +4,7 @@ import { useGameStore } from '../stores/gameStore'
 import { computeAttitude, ATTITUDE_LABELS } from '../utils/attitude'
 import {
   splitMovement, computeEffectiveMaxSpeed, minMoveDistance, buildTackPlan, canTack, scaleSpeed,
+  planSailedDistance,
 } from '../game/movement'
 import { Select } from './Select'
 
@@ -116,15 +117,17 @@ export function PlayerMovementPanel({ unit }: Props) {
     setPlayerOrder(unit.id, null)
   }, [setPlayerOrder, unit.id])
 
+  // The chunks, then the whole turn's move they add up to — the figure the
+  // player measures out in total, and checks the plan against.
   const planString = existingOrder?.isTack
-    ? `Tack: ${existingOrder.totalTurnPoints} pt${existingOrder.totalTurnPoints === 1 ? '' : 's'}, drifting`
+    ? `Tack: ${existingOrder.totalTurnPoints} pt${existingOrder.totalTurnPoints === 1 ? '' : 's'}, drifting ${unit.driftSpeed}mm`
     : existingOrder
-    ? existingOrder.chunks
+    ? `${existingOrder.chunks
         .map(
           (c) =>
             `${Math.round(c.distance)}mm${c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}`,
         )
-        .join(' → ')
+        .join(' → ')} = ${planSailedDistance(existingOrder)}mm`
     : null
 
   return (
