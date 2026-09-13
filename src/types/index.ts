@@ -261,6 +261,35 @@ export interface Unit {
   hiddenAIAction: AIAction | null
 }
 
+/**
+ * What is the ship's own, whichever game she is in: her rig, how she sails,
+ * her base and her guns. Where she stands, which way she heads, whose side she
+ * fights on and how she is faring belong to the game and are left out.
+ */
+export type ShipSettings = Pick<
+  Unit,
+  | 'maxTurnPoints'
+  | 'foreAndAftRigged'
+  | 'speedProfile'
+  | 'speedMultiplier'
+  | 'driftSpeed'
+  | 'baseWidth'
+  | 'baseLength'
+  | 'firingArcs'
+>
+
+/**
+ * A ship's settings saved under a name, so a class of ship is typed in once
+ * and imported into every later game. Kept outside any game: a library the
+ * unit form reads from and writes to.
+ */
+export interface ShipTemplate extends ShipSettings {
+  id: string
+  name: string
+  createdAt: string
+  updatedAt: string
+}
+
 export interface MoveChunk {
   distance: number
   turn?: {

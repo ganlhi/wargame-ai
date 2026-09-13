@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import type { GameState, SavedGame } from '../types'
+import type { GameState, SavedGame, ShipTemplate } from '../types'
 import { CURRENT_SCHEMA_VERSION } from '../stores/migrations'
 import { DriveApiError, type DriveClient, type DriveFileMeta, type DriveFolder } from './driveClient'
 import {
   DriveSyncer,
   INDEX_FILE,
+  TEMPLATES_FILE,
   applySnapshot,
   collectLocalGames,
   gameFileName,
@@ -94,6 +95,29 @@ function makeGame(id: string, name: string, createdAt = '2026-01-01T00:00:00.000
   }
 }
 
+function makeTemplate(id: string, name: string): ShipTemplate {
+  return {
+    id,
+    name,
+    createdAt: '2026-01-01T00:00:00.000Z',
+    updatedAt: '2026-01-01T00:00:00.000Z',
+    maxTurnPoints: 6,
+    foreAndAftRigged: false,
+    speedProfile: {
+      in_irons: { max: 0 },
+      beating: { max: 60 },
+      reaching: { max: 100 },
+      quarter_reaching: { max: 120 },
+      running: { max: 110 },
+    },
+    speedMultiplier: 1,
+    driftSpeed: 10,
+    baseWidth: 30,
+    baseLength: 80,
+    firingArcs: [],
+  }
+}
+
 const FOLDER = 'folder-1'
 
 describe('DriveSyncer — pushing', () => {
@@ -138,10 +162,24 @@ describe('DriveSyncer — pushing', () => {
     expect(drive.byName(INDEX_FILE)[0][1].data).toHaveLength(1)
   })
 
-  it('seeds a folder with every local game', async () => {
+  it('seeds a folder with every local game, and the saved ships only when there are any', async () => {
     const games = [makeGame('a', 'Alpha'), makeGame('b', 'Bravo')]
     await syncer.pushAll(games, games.map(summariseGame))
     expect(drive.files.size).toBe(3)
+    expect(drive.byName(TEMPLATES_FILE)).toHaveLength(0)
+
+    await syncer.pushAll(games, games.map(summariseGame), [makeTemplate('t', 'Seventy-four')])
+    expect(drive.byName(TEMPLATES_FILE)).toHaveLength(1)
+  })
+
+  it('keeps the saved ships in one file, rewritten in place', async () => {
+    await syncer.pushTemplates([makeTemplate('t1', 'Frigate')])
+    await syncer.pushTemplates([makeTemplate('t1', 'Frigate'), makeTemplate('t2', 'Sloop')])
+    expect(drive.byName(TEMPLATES_FILE)).toHaveLength(1)
+    expect((drive.byName(TEMPLATES_FILE)[0][1].data as ShipTemplate[]).map((t) => t.name)).toEqual([
+      'Frigate',
+      'Sloop',
+    ])
   })
 
   it('deletes a game file and rewrites the index, tolerating a game with no file', async () => {
@@ -208,6 +246,32 @@ describe('DriveSyncer — pulling', () => {
     const snapshot = await syncer.pull()
     expect(snapshot!.savedGames.map((g) => g.id)).toEqual(['a'])
   })
+
+  it('reports no library (null) when the folder has games but no ship file', async () => {
+    await drive.uploadJson(FOLDER, gameFileName('a'), makeGame('a', 'Alpha'))
+    const snapshot = await syncer.pull()
+    expect(snapshot!.templates).toBeNull()
+  })
+
+  it('returns the saved ships, dropping entries that are not templates', async () => {
+    await drive.uploadJson(FOLDER, TEMPLATES_FILE, [
+      makeTemplate('t1', 'Frigate'),
+      { id: 't2' }, // no name
+      'junk',
+      { id: 't3', name: 'Bare', firingArcs: [{ side: 'port', maxRange: 300, weapons: 12 }] },
+    ])
+    const snapshot = await syncer.pull()
+    // A folder holding only the library still counts as the app's.
+    expect(snapshot).not.toBeNull()
+    expect(snapshot!.savedGames).toEqual([])
+    expect(snapshot!.templates!.map((t) => t.id)).toEqual(['t1', 't3'])
+    // A sparse template is filled in with the unit defaults and its arcs migrated.
+    const bare = snapshot!.templates![1]
+    expect(bare.baseLength).toBe(80)
+    expect(bare.speedProfile.in_irons.max).toBe(0)
+    expect(bare.firingArcs[0].guns[0].guns).toBe(12)
+    expect(await syncer.countRemoteGames()).toBe(0)
+  })
 })
 
 describe('local storage side', () => {
@@ -220,7 +284,7 @@ describe('local storage side', () => {
     const a = makeGame('a', 'Alpha')
     const b = makeGame('b', 'Bravo')
     const savedGames = applySnapshot(
-      { savedGames: [a, b].map(summariseGame), games: new Map([['a', a], ['b', b]]) },
+      { savedGames: [a, b].map(summariseGame), games: new Map([['a', a], ['b', b]]), templates: null },
       local,
     )
 

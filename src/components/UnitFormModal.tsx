@@ -1,12 +1,16 @@
 import { useState, useRef } from 'react'
 import { v4 as uuid } from 'uuid'
 import { useGameStore } from '../stores/gameStore'
+import { useShipTemplateStore } from '../stores/shipTemplateStore'
+import { deleteShipTemplate, saveShipTemplate } from '../sync/syncActions'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS, SAILING_ATTITUDES } from '../utils/attitude'
 import { ARC_SIDES, RANGE_BANDS, RANGE_BAND_LABELS, RANGE_BAND_MODIFIERS, arcSideLabel } from '../types'
 import type {
   Unit, UnitSide, AIStyle, UnitStatus, ArcSide, Attitude, SpeedRange, GunProfile, RangeBand,
+  FiringArc, ShipSettings, ShipTemplate,
 } from '../types'
 import { speedMultiplierFromPercent, speedMultiplierToPercent } from '../game/movement'
+import { cloneShipSettings, findTemplateByName } from '../utils/shipTemplates'
 import { OffsetInput } from './OffsetInput'
 import { Select } from './Select'
 import {
@@ -209,6 +213,170 @@ function ArcGunsEditor({
   )
 }
 
+/**
+ * The arcs a ship actually carries: any side whose guns amount to nothing is
+ * left out. Arc ids are kept from `existing` where the side already had one.
+ */
+function firingArcsFrom(arcGuns: Record<ArcSide, GunProfile[]>, existing: FiringArc[]): FiringArc[] {
+  return (Object.entries(arcGuns) as [ArcSide, GunProfile[]][])
+    .filter(([, guns]) => guns.some((g) => g.guns > 0 && g.ranges.extreme > 0))
+    .map(([side, guns]) => ({
+      id: existing.find((a) => a.side === side)?.id ?? uuid(),
+      side,
+      guns,
+    }))
+}
+
+/**
+ * The library of saved ships, from inside the unit form: import one to fill
+ * the settings in instead of typing them, or save what is on the form now
+ * under a name so the next ship of her class is a single pick.
+ */
+function SavedShipsSection({
+  shipName,
+  settings,
+  onImport,
+}: {
+  /** The name on the form, offered as the default name to save under. */
+  shipName: string
+  /** What the form currently holds, which is what gets saved. */
+  settings: ShipSettings
+  onImport: (template: ShipTemplate) => void
+}) {
+  const templates = useShipTemplateStore((s) => s.templates)
+  const [selectedId, setSelectedId] = useState<string>('')
+  const [saving, setSaving] = useState(false)
+  const [saveName, setSaveName] = useState('')
+  const [notice, setNotice] = useState<string | null>(null)
+
+  const selected = templates.find((t) => t.id === selectedId)
+  const overwrites = saving ? findTemplateByName(templates, saveName) : undefined
+
+  const startSaving = () => {
+    setSaveName(shipName.trim())
+    setSaving(true)
+    setNotice(null)
+  }
+
+  const commitSave = () => {
+    if (!saveName.trim()) return
+    const saved = saveShipTemplate(saveName, settings)
+    setSaving(false)
+    setSelectedId(saved.id)
+    setNotice(`Saved as ${saved.name}.`)
+  }
+
+  const handleImport = (id: string) => {
+    const template = templates.find((t) => t.id === id)
+    if (!template) return
+    setSelectedId(id)
+    setSaving(false)
+    onImport(template)
+    setNotice(`Settings taken from ${template.name}. Position, heading and side are yours to set.`)
+  }
+
+  const handleRemove = () => {
+    if (!selected) return
+    deleteShipTemplate(selected.id)
+    setSelectedId('')
+    setNotice(`${selected.name} removed from the saved ships.`)
+  }
+
+  const inputClass =
+    'flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500'
+  const linkClass = 'text-xs text-blue-400 hover:text-blue-300 cursor-pointer whitespace-nowrap'
+
+  return (
+    <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50 space-y-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-xs text-gray-400 font-medium">Saved ships</span>
+        {!saving && (
+          <button type="button" onClick={startSaving} className={linkClass}>
+            Save these settings
+          </button>
+        )}
+      </div>
+
+      {templates.length > 0 ? (
+        <div className="flex items-center gap-2">
+          <Select<string>
+            value={selectedId}
+            onChange={handleImport}
+            placeholder="Import a saved ship…"
+            ariaLabel="Import a saved ship"
+            size="sm"
+            className="flex-1 min-w-0"
+            options={templates.map((t) => ({ value: t.id, label: t.name }))}
+          />
+          {selected && (
+            <button
+              type="button"
+              onClick={handleRemove}
+              title={`Remove ${selected.name} from the saved ships`}
+              className="text-xs text-gray-500 hover:text-red-400 cursor-pointer whitespace-nowrap"
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      ) : (
+        !saving && (
+          <p className="text-xs text-gray-600 italic">
+            None yet. Save a ship's settings here and the next one of her class is a single pick.
+          </p>
+        )
+      )}
+
+      {saving && (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-1.5">
+            <input
+              type="text"
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter here names the template; it must not submit the unit.
+                if (e.key === 'Enter') {
+                  e.preventDefault()
+                  commitSave()
+                } else if (e.key === 'Escape') {
+                  e.preventDefault()
+                  setSaving(false)
+                }
+              }}
+              placeholder="74-gun third rate"
+              autoFocus
+              className={inputClass}
+            />
+            <button
+              type="button"
+              onClick={commitSave}
+              disabled={!saveName.trim()}
+              className="text-xs font-medium px-2.5 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed whitespace-nowrap"
+            >
+              {overwrites ? 'Replace' : 'Save'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setSaving(false)}
+              className="text-xs text-gray-400 hover:text-gray-200 px-1 cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
+          <p className="text-xs text-gray-500">
+            {overwrites
+              ? `A saved ship is already called ${overwrites.name}; saving replaces its settings.`
+              : 'Rig, turning, speeds, base and guns are saved. Position, heading, side and status are not.'}
+          </p>
+        </div>
+      )}
+
+      {notice && !saving && <p className="text-xs text-gray-500">{notice}</p>}
+    </div>
+  )
+}
+
 interface UnitFormModalProps {
   unit?: Unit
   /**
@@ -276,6 +444,36 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
   const computedAttitude = computeAttitude(windDirection, orientation, foreAndAftRigged)
   const bestSpeed = Math.max(...SAILING_ATTITUDES.map((a) => speedProfile[a].max))
 
+  // Everything on the form that is the ship's own — what a template holds.
+  const currentSettings: ShipSettings = {
+    maxTurnPoints,
+    foreAndAftRigged,
+    speedProfile,
+    speedMultiplier: speedMultiplierFromPercent(speedPercent),
+    driftSpeed,
+    baseWidth,
+    baseLength,
+    firingArcs: firingArcsFrom(arcGuns, unit?.firingArcs ?? []),
+  }
+
+  // Fill the form from a saved ship. A blank name takes the template's, so a
+  // new ship of a named class is one pick away; a ship already named keeps
+  // hers, since importing a class is not renaming her.
+  const importTemplate = (template: ShipTemplate) => {
+    const settings = cloneShipSettings(template)
+    if (!name.trim()) setName(template.name)
+    setMaxTurnPoints(settings.maxTurnPoints)
+    setForeAndAftRigged(settings.foreAndAftRigged)
+    setSpeedProfile(settings.speedProfile)
+    setSpeedPercent(speedMultiplierToPercent(settings.speedMultiplier))
+    setDriftSpeed(settings.driftSpeed)
+    setBaseWidth(settings.baseWidth)
+    setBaseLength(settings.baseLength)
+    const guns: Record<ArcSide, GunProfile[]> = { bow: [], stern: [], port: [], starboard: [] }
+    for (const arc of settings.firingArcs) guns[arc.side] = arc.guns
+    setArcGuns(guns)
+  }
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
@@ -304,13 +502,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       // Gun layouts are only entered for AI ships — the player rolls their own
       // fire — but anything already on the unit is kept, so flipping a ship to
       // the player's side and back does not throw its armament away.
-      firingArcs: (Object.entries(arcGuns) as [ArcSide, GunProfile[]][])
-        .filter(([, guns]) => guns.some((g) => g.guns > 0 && g.ranges.extreme > 0))
-        .map(([side, guns]) => ({
-          id: unit?.firingArcs.find((a) => a.side === side)?.id ?? uuid(),
-          side,
-          guns,
-        })),
+      firingArcs: currentSettings.firingArcs,
       attitude: computedAttitude,
       prevAttitude: computedAttitude,
       // No movement phase resolved yet: this turn's minimum comes from half
@@ -335,6 +527,8 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 mx-2 max-w-md w-full max-h-[90vh] overflow-y-auto">
         <h2 className="text-base font-semibold mb-4">{unit ? 'Edit Unit' : 'New Unit'}</h2>
         <form onSubmit={handleSubmit} className="space-y-3.5">
+
+          <SavedShipsSection shipName={name} settings={currentSettings} onImport={importTemplate} />
 
           <div>
             <label className="block text-xs text-gray-400 mb-1">Name</label>

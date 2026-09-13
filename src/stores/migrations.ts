@@ -1,4 +1,6 @@
-import type { ArcSide, FiringArc, GameState, GunProfile, TableTerrain, TerrainShape } from '../types'
+import type {
+  ArcSide, FiringArc, GameState, GunProfile, ShipTemplate, TableTerrain, TerrainShape,
+} from '../types'
 import { normaliseSpeedMultiplier, tackTurnDirection } from '../game/movement'
 
 /**
@@ -131,6 +133,43 @@ function migrateTerrain(raw: RawRecord): TableTerrain {
 
   const { center, shape } = terrainFromVertices((raw.vertices ?? []) as { x: number; y: number }[])
   return { id, type, center, shape }
+}
+
+/**
+ * A saved ship template from storage or Drive, with the same defaults a unit
+ * gets, or null when the object is not a template at all. Templates are
+ * written by the same build that reads them far more often than games are
+ * carried across versions, so they get the unit's field defaults rather than a
+ * schema history of their own.
+ */
+export function normaliseShipTemplate(raw: unknown): ShipTemplate | null {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const t = raw as RawRecord
+  if (typeof t.id !== 'string' || typeof t.name !== 'string' || !t.name.trim()) return null
+  const profile = (t.speedProfile ?? {}) as Partial<ShipTemplate['speedProfile']>
+  const timestamp = typeof t.updatedAt === 'string' ? t.updatedAt : new Date(0).toISOString()
+  return {
+    id: t.id,
+    name: t.name,
+    createdAt: typeof t.createdAt === 'string' ? t.createdAt : timestamp,
+    updatedAt: timestamp,
+    maxTurnPoints: Number(t.maxTurnPoints ?? 6),
+    foreAndAftRigged: Boolean(t.foreAndAftRigged ?? false),
+    speedProfile: {
+      in_irons: { max: 0 },
+      beating: { max: Number(profile.beating?.max ?? 60) },
+      reaching: { max: Number(profile.reaching?.max ?? 100) },
+      quarter_reaching: { max: Number(profile.quarter_reaching?.max ?? 120) },
+      running: { max: Number(profile.running?.max ?? 110) },
+    },
+    speedMultiplier: normaliseSpeedMultiplier(Number(t.speedMultiplier ?? 1)),
+    driftSpeed: Number(t.driftSpeed ?? 10),
+    baseWidth: Number(t.baseWidth ?? 30),
+    baseLength: Number(t.baseLength ?? 80),
+    firingArcs: ((Array.isArray(t.firingArcs) ? t.firingArcs : []) as RawRecord[]).map(
+      migrateFiringArc,
+    ),
+  }
 }
 
 /**

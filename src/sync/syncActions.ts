@@ -1,8 +1,16 @@
 import { useGameStore } from '../stores/gameStore'
-import type { GameState } from '../types'
+import { useShipTemplateStore } from '../stores/shipTemplateStore'
+import type { GameState, ShipSettings, ShipTemplate } from '../types'
 import { useDriveSyncStore, effectiveClientId } from './syncStore'
 import { createDriveClient, DriveApiError, type DriveClient, type DriveFolder } from './driveClient'
-import { DriveSyncer, applySnapshot, collectLocalGames, localGameKey, type FileIdCache } from './driveSync'
+import {
+  DriveSyncer,
+  applySnapshot,
+  collectLocalGames,
+  localGameKey,
+  type FileIdCache,
+  type RemoteSnapshot,
+} from './driveSync'
 import {
   clearStoredToken,
   getAccessToken,
@@ -126,6 +134,41 @@ export function deleteGame(id: string): void {
   void run('push', (s) => s.deleteGame(id, savedGames))
 }
 
+/** Save a ship's settings to the library here, then mirror the whole library to Drive. */
+export function saveShipTemplate(name: string, settings: ShipSettings): ShipTemplate {
+  const template = useShipTemplateStore.getState().saveTemplate(name, settings)
+  pushTemplates()
+  return template
+}
+
+/** Drop a saved ship here and on Drive. */
+export function deleteShipTemplate(id: string): void {
+  useShipTemplateStore.getState().removeTemplate(id)
+  pushTemplates()
+}
+
+function pushTemplates(): void {
+  const { templates } = useShipTemplateStore.getState()
+  void run('push', (s) => s.pushTemplates(templates))
+}
+
+/**
+ * Make this device match what the folder holds. Games are replaced outright.
+ * The saved ships are too when the folder has a library — but a folder with
+ * none keeps the local library and is given a copy of it, so ships saved
+ * before sync was set up are not lost to a device that never had them.
+ */
+async function adoptSnapshot(s: DriveSyncer, snapshot: RemoteSnapshot): Promise<void> {
+  const savedGames = applySnapshot(snapshot, localStorage)
+  useGameStore.setState({ savedGames })
+  const templateStore = useShipTemplateStore.getState()
+  if (snapshot.templates) {
+    templateStore.replaceAll(snapshot.templates)
+  } else if (templateStore.templates.length > 0) {
+    await s.pushTemplates(templateStore.templates)
+  }
+}
+
 export type PullResult = 'replaced' | 'empty'
 
 /**
@@ -137,8 +180,7 @@ export function pullFromDrive(): Promise<PullResult | undefined> {
   return run('pull', async (s) => {
     const snapshot = await s.pull()
     if (!snapshot) return 'empty'
-    const savedGames = applySnapshot(snapshot, localStorage)
-    useGameStore.setState({ savedGames })
+    await adoptSnapshot(s, snapshot)
     return 'replaced'
   })
 }
@@ -165,12 +207,12 @@ export function connectFolder(folder: DriveFolder): Promise<ConnectResult | unde
   return run('pull', async (s) => {
     const snapshot = await s.pull()
     if (snapshot) {
-      const savedGames = applySnapshot(snapshot, localStorage)
-      useGameStore.setState({ savedGames })
+      await adoptSnapshot(s, snapshot)
       return 'pulled'
     }
     const { savedGames } = useGameStore.getState()
-    await s.pushAll(collectLocalGames(savedGames, localStorage), savedGames)
+    const { templates } = useShipTemplateStore.getState()
+    await s.pushAll(collectLocalGames(savedGames, localStorage), savedGames, templates)
     return 'seeded'
   })
 }

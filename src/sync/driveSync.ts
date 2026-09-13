@@ -1,17 +1,21 @@
-import type { GameState, SavedGame } from '../types'
-import { migrateSavedGame } from '../stores/migrations'
+import type { GameState, SavedGame, ShipTemplate } from '../types'
+import { migrateSavedGame, normaliseShipTemplate } from '../stores/migrations'
 import { DriveApiError, type DriveClient } from './driveClient'
 
 /**
  * What the app keeps in the Drive folder mirrors what it keeps in local
- * storage: one index file listing the games, and one file per game holding
- * its full state. Saving a game rewrites its own file and the index; loading
- * from Drive reads everything and replaces the local copies wholesale — Drive
- * is the source of truth once sync is set up.
+ * storage: one index file listing the games, one file per game holding its
+ * full state, and one file for the library of saved ships. Saving a game
+ * rewrites its own file and the index; saving a ship template rewrites the
+ * library file; loading from Drive reads everything and replaces the local
+ * copies wholesale — Drive is the source of truth once sync is set up.
  */
 export const INDEX_FILE = 'games.json'
+export const TEMPLATES_FILE = 'ship-templates.json'
 export const gameFileName = (id: string): string => `game-${id}.json`
 const GAME_FILE = /^game-(.+)\.json$/
+const isAppFile = (name: string): boolean =>
+  name === INDEX_FILE || name === TEMPLATES_FILE || GAME_FILE.test(name)
 /** Local storage key a game is kept under, matching what the game store reads. */
 export const localGameKey = (id: string): string => `game-${id}`
 
@@ -30,6 +34,11 @@ export interface FileIdCache {
 export interface RemoteSnapshot {
   savedGames: SavedGame[]
   games: Map<string, GameState>
+  /**
+   * The saved ships, or null when the folder has no library file at all — in
+   * which case the local library is kept (and pushed) rather than emptied.
+   */
+  templates: ShipTemplate[] | null
 }
 
 export function summariseGame(game: GameState): SavedGame {
@@ -63,12 +72,18 @@ export class DriveSyncer {
     await this.upload(INDEX_FILE, savedGames)
   }
 
-  /** Seed an empty folder with everything held locally. */
-  async pushAll(games: GameState[], savedGames: SavedGame[]): Promise<void> {
+  /** The whole library of saved ships — what saving or deleting a template does. */
+  async pushTemplates(templates: ShipTemplate[]): Promise<void> {
+    await this.upload(TEMPLATES_FILE, templates)
+  }
+
+  /** Seed an empty folder with everything held locally. An empty library is not worth a file. */
+  async pushAll(games: GameState[], savedGames: SavedGame[], templates: ShipTemplate[] = []): Promise<void> {
     for (const game of games) {
       await this.upload(gameFileName(game.id), game)
     }
     await this.upload(INDEX_FILE, savedGames)
+    if (templates.length > 0) await this.pushTemplates(templates)
   }
 
   /** Remove a game's file and rewrite the index without it. A game with no file on Drive is not an error. */
@@ -108,17 +123,21 @@ export class DriveSyncer {
   async pull(): Promise<RemoteSnapshot | null> {
     const files = await this.refreshFileIds()
     const indexFile = files.find((f) => f.name === INDEX_FILE)
+    const templatesFile = files.find((f) => f.name === TEMPLATES_FILE)
     const gameFiles = files.filter((f) => GAME_FILE.test(f.name))
-    if (!indexFile && gameFiles.length === 0) return null
+    if (!indexFile && !templatesFile && gameFiles.length === 0) return null
 
     const games = new Map<string, GameState>()
-    await Promise.all(
-      gameFiles.map(async (f) => {
+    const [templates] = await Promise.all([
+      templatesFile
+        ? this.client.downloadJson(templatesFile.id).then(parseTemplates)
+        : Promise.resolve<ShipTemplate[] | null>(null),
+      ...gameFiles.map(async (f) => {
         const raw = await this.client.downloadJson(f.id)
         const game = parseGame(raw)
         if (game) games.set(game.id, game)
       }),
-    )
+    ])
 
     const listed: string[] = []
     if (indexFile) {
@@ -135,13 +154,13 @@ export class DriveSyncer {
       .sort((a, b) => games.get(a)!.createdAt.localeCompare(games.get(b)!.createdAt))
 
     const savedGames = [...listed, ...unlisted].map((id) => summariseGame(games.get(id)!))
-    return { savedGames, games }
+    return { savedGames, games, templates }
   }
 
   private async refreshFileIds(): Promise<{ id: string; name: string }[]> {
     const files = await this.client.listFiles(this.folderId)
     for (const f of files) {
-      if (f.name === INDEX_FILE || GAME_FILE.test(f.name)) this.cache.set(f.name, f.id)
+      if (isAppFile(f.name)) this.cache.set(f.name, f.id)
     }
     return files
   }
@@ -175,10 +194,17 @@ function parseGame(raw: unknown): GameState | null {
   }
 }
 
+/** The library file's contents; anything in it that is not a template is dropped, and a file that is not a list is an empty library. */
+function parseTemplates(raw: unknown): ShipTemplate[] {
+  if (!Array.isArray(raw)) return []
+  return raw.map(normaliseShipTemplate).filter((t): t is ShipTemplate => t !== null)
+}
+
 /**
  * Make local storage match a snapshot: every game in it is written, every
  * local game not in it is removed, and nothing else in storage is touched.
- * Returns the game list for the store to adopt.
+ * Returns the game list for the store to adopt. The saved ships live in their
+ * own store and are adopted by the caller.
  */
 export function applySnapshot(snapshot: RemoteSnapshot, storage: Storage): SavedGame[] {
   const keep = new Set([...snapshot.games.keys()].map(localGameKey))
