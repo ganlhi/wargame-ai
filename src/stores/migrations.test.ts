@@ -1,5 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import { migrateSavedGame, CURRENT_SCHEMA_VERSION } from './migrations'
+import {
+  driftSpeed, gunRanges, nearestGunType, nearestShipType, speedProfile, turnPoints,
+} from '../data/binder'
 
 /** A pre-infinite-table save: bounded table, background photo, traced terrain. */
 const legacySave = {
@@ -134,13 +137,14 @@ describe('migrateSavedGame — guns and speed', () => {
   const game = migrateSavedGame({ ...preGunProfiles })
   const unit = game.units[0]
 
-  it('turns a single range and gun count into one profile with four bands', () => {
+  it('turns a single range and gun count into the gun that reaches about as far', () => {
     expect(unit.firingArcs).toHaveLength(1)
     const [profile] = unit.firingArcs[0].guns
     expect(profile.guns).toBe(12)
-    // The bands reproduce the tiers the AI used to derive from `maxRange`:
-    // each 60% of the one outside it, so she fights at the same distances.
-    expect(profile.ranges).toEqual({ close: 65, medium: 108, long: 180, extreme: 300 })
+    // A pre-charts arc records how far it carried but not what it was, so it
+    // takes the gun whose reach is nearest and the bands that come with it.
+    expect(profile.type).toBe(nearestGunType(300, '1/1200'))
+    expect(profile.ranges).toEqual(gunRanges(profile.type, '1/1200'))
   })
 
   it('keeps a multiplier the save already carried, full sail included', () => {
@@ -155,16 +159,21 @@ describe('migrateSavedGame — guns and speed', () => {
     expect(older.units[0].speedMultiplier).toBe(1)
   })
 
-  it('zeroes any sailing speed quoted for a ship in irons', () => {
+  it('reads speeds, drift and turning back off the charts for the ship it matched', () => {
+    // Nothing typed in survives: the save is read as 1/1200 in a moderate
+    // breeze, and everything about how she sails follows from her type.
+    expect(unit.shipType).toBe(nearestShipType(100, 6, 'moderate_breeze', '1/1200'))
+    expect(unit.speedProfile).toEqual(speedProfile(unit.shipType, 'moderate_breeze', '1/1200'))
     expect(unit.speedProfile.in_irons).toEqual({ max: 0 })
-    expect(unit.speedProfile.quarter_reaching).toEqual({ max: 100 })
+    expect(unit.driftSpeed).toBe(driftSpeed(unit.shipType, 'moderate_breeze', '1/1200'))
+    expect(unit.maxTurnPoints).toBe(turnPoints(unit.shipType))
   })
 
   it('drops a fire plan chosen against the old gun data', () => {
     expect(unit.hiddenAIFirePlan).toBeNull()
   })
 
-  it('leaves arcs already holding gun profiles alone', () => {
+  it('keeps the gun count of an arc that already held profiles, re-reading its ranges', () => {
     const current = migrateSavedGame({
       ...preGunProfiles,
       schemaVersion: 10,
@@ -191,11 +200,12 @@ describe('migrateSavedGame — guns and speed', () => {
         },
       ],
     })
+    const type = nearestGunType(150, '1/1200')
     expect(current.units[0].firingArcs[0].guns[0]).toEqual({
       id: 'g1',
-      name: 'Carronade',
+      type,
       guns: 6,
-      ranges: { close: 40, medium: 80, long: 120, extreme: 150 },
+      ranges: gunRanges(type, '1/1200'),
     })
     expect(current.units[0].hiddenAIFirePlan?.band).toBe('medium')
   })

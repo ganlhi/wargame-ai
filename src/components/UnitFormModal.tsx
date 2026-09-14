@@ -6,6 +6,8 @@ import { deleteShipTemplate, saveShipTemplate } from '../sync/syncActions'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
 import type { Unit, UnitSide, AIStyle, UnitStatus, ShipSettings, ShipTemplate } from '../types'
 import { cloneShipSettings, findTemplateByName } from '../utils/shipTemplates'
+import { REFERENCE_SCALE } from '../data/binder'
+import { conditionsOf, shipStats } from '../game/shipStats'
 import { OffsetInput } from './OffsetInput'
 import { Select } from './Select'
 import { GunsFields, ShipSettingsFields } from './ShipSettingsFields'
@@ -232,13 +234,18 @@ interface UnitFormModalProps {
 export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFormModalProps) {
   const currentGame = useGameStore((s) => s.currentGame)
   const windDirection = currentGame?.windDirection ?? 0
+  // The unit form only ever opens inside a game, so the scale and weather her
+  // speeds and ranges are read against are always to hand.
+  const conditions = conditionsOf(
+    currentGame ?? { scale: REFERENCE_SCALE, windStrength: 'moderate_breeze' },
+  )
   const [name, setName] = useState(unit?.name ?? '')
   const [side, setSide] = useState<UnitSide>(unit?.side ?? 'player')
   const [orientation, setOrientation] = useState(unit?.orientation ?? 0)
   const [status, setStatus] = useState<UnitStatus>(unit?.status ?? 'active')
   const [aiStyle, setAiStyle] = useState<AIStyle>(unit?.aiStyle ?? 'cautious')
   // Everything that is the ship's own — what a saved ship holds — in one draft.
-  const [draft, setDraft] = useState(() => draftFromSettings(unit))
+  const [draft, setDraft] = useState(() => draftFromSettings(unit, conditions.scale))
 
   const origin = currentGame ? originPoint(currentGame) : { x: 0, y: 0 }
   const anchorName = currentGame ? originName(currentGame) : null
@@ -267,7 +274,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
   // hers, since importing a class is not renaming her.
   const importTemplate = (template: ShipTemplate) => {
     if (!name.trim()) setName(template.name)
-    setDraft(draftFromSettings(cloneShipSettings(template)))
+    setDraft(draftFromSettings(cloneShipSettings(template), conditions.scale))
   }
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -290,6 +297,9 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       // fire — but anything already on the unit is kept, so flipping a ship to
       // the player's side and back does not throw its armament away.
       ...currentSettings,
+      // Speeds, drift and turning are the charts', read off her type against
+      // this game's scale and weather rather than entered anywhere.
+      ...shipStats(currentSettings.shipType, conditions),
       attitude: computedAttitude,
       prevAttitude: computedAttitude,
       // No movement phase resolved yet: this turn's minimum comes from half
@@ -410,10 +420,14 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
             </div>
           )}
 
-          <ShipSettingsFields draft={draft} onChange={setDraft} />
+          <ShipSettingsFields draft={draft} onChange={setDraft} conditions={conditions} />
 
           {side === 'ai' && (
-            <GunsFields arcGuns={draft.arcGuns} onChange={(arcGuns) => setDraft({ ...draft, arcGuns })} />
+            <GunsFields
+              arcGuns={draft.arcGuns}
+              scale={conditions.scale}
+              onChange={(arcGuns) => setDraft({ ...draft, arcGuns })}
+            />
           )}
 
           <div className="flex gap-2 pt-2">

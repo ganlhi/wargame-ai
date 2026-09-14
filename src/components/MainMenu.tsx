@@ -1,5 +1,7 @@
 import { useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
+import { SCALES } from '../types'
+import type { Scale } from '../types'
 import { deleteGame } from '../sync/syncActions'
 import { DriveSyncPanel } from './DriveSyncPanel'
 import { SavedShipsPanel } from './SavedShipsPanel'
@@ -8,11 +10,15 @@ export function MainMenu() {
   const { savedGames, createGame, loadGame } = useGameStore()
   const [showNew, setShowNew] = useState(false)
   const [newName, setNewName] = useState('')
+  // The scale the models are built to. Every distance in the game — how far a
+  // ship sails in a turn, how far her guns carry — is read from the rulebook's
+  // charts against it, so it is settled before anything is placed.
+  const [newScale, setNewScale] = useState<Scale>('1/1200')
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
 
   const handleCreate = () => {
     if (!newName.trim()) return
-    createGame(newName.trim())
+    createGame(newName.trim(), newScale)
     setNewName('')
     setShowNew(false)
   }
@@ -56,6 +62,30 @@ export function MainMenu() {
                 placeholder="e.g. Battle of Trafalgar"
                 className="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-gray-100 placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
+            </div>
+
+            <label className="block text-sm font-medium text-gray-300 mt-4 mb-2">Scale</label>
+            <div className="flex gap-2">
+              {SCALES.map((scale) => (
+                <button
+                  key={scale}
+                  onClick={() => setNewScale(scale)}
+                  className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                    newScale === scale
+                      ? 'bg-blue-600 text-white'
+                      : 'bg-gray-800 text-gray-400 border border-gray-700'
+                  }`}
+                >
+                  {scale}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-500 mt-2">
+              Speeds and gun ranges are read from the rulebook's charts at this scale, so it is
+              fixed once ships are on the table.
+            </p>
+
+            <div className="flex gap-2 mt-4">
               <button
                 onClick={handleCreate}
                 disabled={!newName.trim()}

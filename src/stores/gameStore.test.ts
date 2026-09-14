@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { ArcSide, FiringArc, Unit } from '../types'
+import { driftSpeed, speedProfile } from '../data/binder'
 
 // The store reaches for localStorage at import time (zustand `persist`) and on
 // save/load. A tiny in-memory stand-in keeps these tests in the default node
@@ -30,9 +31,10 @@ function makeArc(id: string, side: ArcSide, extreme = 300, guns = 10): FiringArc
     guns: [
       {
         id: `${id}-g`,
-        name: 'Guns',
+        type: 'long_24',
         guns,
         ranges: {
+          point_blank: 20,
           close: Math.round(extreme * 0.216),
           medium: Math.round(extreme * 0.36),
           long: Math.round(extreme * 0.6),
@@ -52,7 +54,7 @@ function makeUnit(id: string, overrides: Partial<Unit> = {}): Unit {
     orientation: 0,
     status: 'active',
     aiStyle: 'cautious',
-    maxTurnPoints: 6,
+    shipType: 'rate_4', maxTurnPoints: 6,
     foreAndAftRigged: false,
     speedProfile: {
       in_irons: { max: 0 }, beating: { max: 60 }, reaching: { max: 80 },
@@ -84,7 +86,7 @@ describe('gameStore — coordinate origin', () => {
   beforeEach(() => {
     localStorage.clear()
     useGameStore.setState({ savedGames: [], currentGame: null, hasUnsavedChanges: false })
-    store().createGame('Test')
+    store().createGame('Test', '1/1200')
   })
 
   it('starts with no origin and adopts the first entity added', () => {
@@ -149,7 +151,7 @@ describe('gameStore — turn resolution on an infinite table', () => {
   beforeEach(() => {
     localStorage.clear()
     useGameStore.setState({ savedGames: [], currentGame: null, hasUnsavedChanges: false })
-    store().createGame('Test')
+    store().createGame('Test', '1/1200')
   })
 
   it('logs positions relative to the origin *after* everyone has moved', () => {
@@ -207,7 +209,7 @@ describe('gameStore — tacking', () => {
   beforeEach(() => {
     localStorage.clear()
     useGameStore.setState({ savedGames: [], currentGame: null, hasUnsavedChanges: false })
-    store().createGame('Test')
+    store().createGame('Test', '1/1200')
   })
 
   const resolve = () => {
@@ -223,12 +225,17 @@ describe('gameStore — tacking', () => {
    */
   const setUpBeatingShip = (overrides: Partial<Unit> = {}) => {
     store().addUnit(makeUnit('u1', {
-      orientation: 6, maxTurnPoints: 2, driftSpeed: 50, baseWidth: 0, baseLength: 0, ...overrides,
+      orientation: 6, shipType: 'rate_1', baseWidth: 0, baseLength: 0, ...overrides,
     }))
     store().setWindDirection(0)
     store().startGame()
     return store().currentGame!.units[0]
   }
+
+  // How far the charts carry her in a turn with no way on. The store reads it
+  // back off her type the moment she is added, so it is no use asserting
+  // against a figure the fixture set.
+  const DRIFT = driftSpeed('rate_1', 'moderate_breeze', '1/1200')
 
   it('carries a declared tack through resolution: drifting, in irons, still swinging', () => {
     const unit = setUpBeatingShip()
@@ -241,7 +248,7 @@ describe('gameStore — tacking', () => {
     expect(after.tackDirection).toBe('port')
     expect(after.attitude).toBe('in_irons')
     // Wind from the north pushes her south, and she makes no way of her own.
-    expect(after.position.y).toBe(50)
+    expect(after.position.y).toBe(DRIFT)
     expect(after.prevMoveDistance).toBe(0)
   })
 
@@ -255,7 +262,7 @@ describe('gameStore — tacking', () => {
     after = resolve()
 
     expect(after.orientation).not.toBe(swungTo)
-    expect(after.position.y).toBe(100)
+    expect(after.position.y).toBe(DRIFT * 2)
     expect(after.tackDirection).toBe('port')
   })
 
@@ -291,7 +298,7 @@ describe('gameStore — reloading', () => {
   beforeEach(() => {
     localStorage.clear()
     useGameStore.setState({ savedGames: [], currentGame: null, hasUnsavedChanges: false })
-    store().createGame('Test')
+    store().createGame('Test', '1/1200')
     // Bow north, so the starboard broadside bears on a ship lying due east.
     store().addUnit(makeUnit('ai1', { side: 'ai', orientation: 0, firingArcs: BROADSIDES }))
     store().addUnit(makeUnit('p1', { position: { x: 200, y: 0 }, firingArcs: BROADSIDES }))
@@ -335,5 +342,65 @@ describe('gameStore — reloading', () => {
     const after = reveal()
     expect(after.hiddenAIFirePlan).toMatchObject({ targetId: 'p2', arcSide: 'port', chunkIndex: 0 })
     expect(after.lastFireChunks).toEqual({ port: 0 })
+  })
+})
+
+describe('gameStore — the weather turning', () => {
+  beforeEach(() => {
+    localStorage.clear()
+    useGameStore.setState({ savedGames: [], currentGame: null, hasUnsavedChanges: false })
+    store().createGame('Test', '1/1200')
+    // Wind from the north; heading 12 is quarter reaching on the starboard tack.
+    store().addUnit(makeUnit('ai1', { side: 'ai', orientation: 12, shipType: 'rate_3' }))
+    store().addUnit(makeUnit('p1', { position: { x: 400, y: 0 }, orientation: 12 }))
+    store().setWindDirection(0)
+    store().startGame()
+  })
+
+  const ai = () => store().currentGame!.units.find((u) => u.id === 'ai1')!
+
+  it('re-rates every ship against the charts for the new weather', () => {
+    expect(ai().speedProfile).toEqual(speedProfile('rate_3', 'moderate_breeze', '1/1200'))
+    store().setWindStrength('gale')
+    expect(ai().speedProfile).toEqual(speedProfile('rate_3', 'gale', '1/1200'))
+    expect(ai().driftSpeed).toBe(driftSpeed('rate_3', 'gale', '1/1200'))
+  })
+
+  it('lays the AI orders again, since the old ones were measured against speeds she has lost', () => {
+    const before = ai().hiddenAIOrder!
+    store().setWindStrength('slight_air')
+    const after = ai().hiddenAIOrder!
+    // A slight air is a third of a moderate breeze, and no plan may ask for
+    // more than the ship can now make.
+    const ceiling = speedProfile('rate_3', 'slight_air', '1/1200').quarter_reaching.max
+    expect(after.chunks.reduce((d, c) => d + c.distance, 0)).toBeLessThanOrEqual(ceiling)
+    expect(after).not.toEqual(before)
+  })
+
+  it('drops the order the player had entered, for them to lay again', () => {
+    const chunk = { distance: 40 }
+    store().setPlayerOrder('p1', {
+      chunks: [chunk, chunk, chunk, chunk, chunk],
+      totalTurnPoints: 0,
+      effectiveMaxSpeed: 200,
+    })
+    expect(store().currentGame!.units.find((u) => u.id === 'p1')!.playerOrder).not.toBeNull()
+    store().setWindStrength('fresh_breeze')
+    expect(store().currentGame!.units.find((u) => u.id === 'p1')!.playerOrder).toBeNull()
+  })
+
+  it('takes a revealed turn back to its orders, since what was revealed no longer holds', () => {
+    store().revealOrders()
+    expect(store().currentGame!.currentPhase).toBe('reveal')
+    store().setWindStrength('gale')
+    expect(store().currentGame!.currentPhase).toBe('orders')
+    expect(ai().hiddenAIFirePlan).toBeNull()
+    expect(store().currentGame!.actionLog.at(-1)!.text).toMatch(/gale/i)
+  })
+
+  it('does nothing at all when the weather has not actually changed', () => {
+    const before = store().currentGame!
+    store().setWindStrength(before.windStrength)
+    expect(store().currentGame!).toBe(before)
   })
 })

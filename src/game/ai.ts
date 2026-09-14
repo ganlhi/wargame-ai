@@ -78,7 +78,7 @@ type RangeTiers = Record<RangeBand, number>
  * a gun layout, so the player's is left blank.
  */
 function ownRangeTiers(unit: Unit): RangeTiers | null {
-  const tiers: RangeTiers = { close: 0, medium: 0, long: 0, extreme: 0 }
+  const tiers: RangeTiers = { point_blank: 0, close: 0, medium: 0, long: 0, extreme: 0 }
   let any = false
   for (const arc of unit.firingArcs) {
     for (const profile of arc.guns) {
@@ -96,6 +96,7 @@ function ownRangeTiers(unit: Unit): RangeTiers | null {
 // nominal reach the disengagement leash uses, so the style logic still has
 // meaningful distances to work with.
 const DEFAULT_RANGE_TIERS: RangeTiers = {
+  point_blank: LEASH_FALLBACK_RANGE * 0.05,
   close: LEASH_FALLBACK_RANGE * 0.2,
   medium: LEASH_FALLBACK_RANGE * 0.4,
   long: LEASH_FALLBACK_RANGE * 0.7,

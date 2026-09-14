@@ -10,9 +10,9 @@ const SPEED_PROFILE: Record<Attitude, SpeedRange> = {
 function gun(id: string, guns: number, close: number, reach = close * 3): GunProfile {
   return {
     id,
-    name: id,
+    type: 'long_24',
     guns,
-    ranges: { close, medium: close * 1.5, long: close * 2, extreme: reach },
+    ranges: { point_blank: 20, close, medium: close * 1.5, long: close * 2, extreme: reach },
   }
 }
 
@@ -36,7 +36,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
   return {
     id: 'u1', name: 'Test', side: 'ai',
     position: { x: 0, y: 0 }, orientation: 0, status: 'active', aiStyle: 'aggressive',
-    maxTurnPoints: 6, foreAndAftRigged: false, speedProfile: SPEED_PROFILE,
+    shipType: 'rate_4', maxTurnPoints: 6, foreAndAftRigged: false, speedProfile: SPEED_PROFILE,
     speedMultiplier: 1,
     driftSpeed: 10, baseWidth: 30, baseLength: 80, firingArcs: BROADSIDES,
     attitude: 'reaching', isInIrons: false, grappledWith: null, tackDirection: null,

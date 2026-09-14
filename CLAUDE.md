@@ -24,10 +24,22 @@ Positions are stored in an arbitrary world frame (+x = East, +y = South) and con
 
 The origin can be re-pointed at any entity from the unit/terrain panel. It is only reassigned automatically when the origin entity is **deleted** — a destroyed or surrendered ship is still a model on the table, so it remains a perfectly good reference point.
 
+## The rulebook's charts
+
+Nothing about how fast a ship sails or how far her guns carry is typed in. Those figures are the rulebook's, transcribed from the binder into `src/data/binder.ts` and read at run time:
+
+- **Sailing speeds and drift** come from the sailing charts, by the ship's **type**, the **wind strength** and the game's **scale**. Several types share a row — a 1st and a 2nd rate sail alike — so a type maps to a chart category rather than being one.
+- **Turning points** come from the movement chart, by ship type alone. A 1st rate turns 3 points a turn where a cutter turns 10, which is what separates types the sailing charts rate together.
+- **Gun ranges** come from the range charts, by the **gun type** and the game's scale.
+
+The charts are printed in two units and held in one: ranges are given in centimetres and stored as millimetres (the unit the whole table is measured in); speeds are already millimetres for a whole game turn.
+
+So a ship is described by what she *is*, and everything that follows is looked up. Those looked-up values are still kept on the unit — the movement and AI code reads `speedProfile`, `driftSpeed`, `maxTurnPoints` and each gun's `ranges` as before — but they are a **cache, not a setting**: `resolveUnit` rewrites them from the ship's type and the game's conditions on every write, so nothing downstream ever has to wonder whether a figure is stale. A ship imported from the library into a game at another scale is re-read into that scale automatically.
+
 ## End-user usage
 
-- The user creates a game
-- The user specifies the wind direction
+- The user creates a game, giving it a **scale** — 1/700 or 1/1200. Every distance in the game is read from the charts against it, so it is settled before anything is placed.
+- The user specifies the wind's direction and its **strength** — slight air, light breeze, gentle breeze, moderate breeze, fresh breeze or gale. Strength can be changed from the battlefield as the weather turns, which re-rates the whole fleet on the spot; because every plan already laid was measured against speeds that no longer apply, the orders go with it — the AI's laid again at once, the player's for them to enter afresh, and a turn already revealed stepped back to its orders phase.
 - The user describes the terrain pieces. Each is a simplified primitive rather than a traced outline:
     - a shape: circle, ellipse or rectangle
     - its size (diameter, or width E–W and length N–S)
@@ -40,13 +52,13 @@ The origin can be re-pointed at any entity from the unit/terrain panel. It is on
     - position of the **middle of the rear side of the base**, as an offset from the origin
     - rig: square (the default) or fore & aft, which shifts the in-irons/beating boundary
     - base footprint (width and length)
-    - top speed on each point of sail, best to worst — quarter reaching, running, reaching, beating. In irons is not among them: head to wind a ship carries no way of her own and drifts instead, at her drift speed.
+    - her **type**, chosen from a list of the binder's — 1st to 6th rates, large frigates, sloops, xebecs, brigs, snows, schooners, cutters and the rest. Her speed on every point of sail, her drift and how many points she may turn all follow from it; the form shows what the charts give her, read-only. In irons is never among the speeds: head to wind a ship carries no way of her own and drifts instead.
     - a speed multiplier scaling every one of those figures, so one number makes a ship faster or slower overall. It is **entered as a whole percentage** — 100% by default, less for a ship shortened down, more for one under full sail — and applied as the decimal it stands for, so 90% multiplies her speeds by 0.9. Percentages are typed rather than decimals because a field that reparses every keystroke cannot hold a half-typed decimal: `0.` is not yet a number, so it lands as 0 and the digits after the point never arrive.
-    - if it's an AI unit, its gun layout (see firing below) and its initial "style": aggressive, cautious, defensive (this has an impact on movement decisions, see movement rules below)
+    - if it's an AI unit, its gun layout — per arc, a **gun type** out of the charts and how many of them (see firing below) and its initial "style": aggressive, cautious, defensive (this has an impact on movement decisions, see movement rules below)
 
 Only AI ships carry a gun layout. The player rolls their own fire at the table, so entering one for a player ship would be data nobody reads; where the AI needs to judge how dangerous a player ship is, it falls back on its own ranges.
 
-A ship's settings can be **saved under a name and imported into another ship** instead of being typed again. A saved ship holds what is the ship's own whichever game she is in — rig, turn points, speeds and multiplier, drift speed, base footprint and gun layout — and none of her game state: position, heading, side, status and AI style are left to the unit. The library lives outside any game, in its own local storage entry (mirrored to Drive when sync is on). It is reached in two places. On the **home page**, a *Saved Ships* list under the games shows every ship with a one-line summary; a ship can be added there from scratch, and tapping one opens it for editing (name included, though two saved ships may not share a name) or deletion. In the **unit form**, *Save these settings* names the current form's settings (saving under an existing name, ignoring case, replaces that ship), and a dropdown imports one, which fills the form and takes the saved name as the ship's when the name field is blank. Importing gives every arc and gun profile fresh ids so two ships from one template stay editable independently. Both forms edit a ship's settings through one shared set of fields, so a class looks the same wherever it is met; the saved-ship form always shows the guns, where the unit form shows them only for AI ships.
+A ship's settings can be **saved under a name and imported into another ship** instead of being typed again. A saved ship holds what is the ship's own whichever game she is in — her type, rig, sail set, base footprint and gun layout — and none of her game state: position, heading, side, status and AI style are left to the unit. Nor does she hold a single speed or range: those belong to the scale and weather of whatever game she is fought in, and are read from the charts when she is imported into one. The library lives outside any game, in its own local storage entry (mirrored to Drive when sync is on). It is reached in two places. On the **home page**, a *Saved Ships* list under the games shows every ship with a one-line summary; a ship can be added there from scratch, and tapping one opens it for editing (name included, though two saved ships may not share a name) or deletion. In the **unit form**, *Save these settings* names the current form's settings (saving under an existing name, ignoring case, replaces that ship), and a dropdown imports one, which fills the form and takes the saved name as the ship's when the name field is blank. Importing gives every arc and gun profile fresh ids so two ships from one template stay editable independently. Both forms edit a ship's settings through one shared set of fields, so a class looks the same wherever it is met; the saved-ship form always shows the guns, where the unit form shows them only for AI ships.
 - The game can start
 - During the game, the user can:
     - update position and orientation of any unit
@@ -60,13 +72,13 @@ A ship's settings can be **saved under a name and imported into another ship** i
 
 Units have a maximum and minimum movement range. Between these boundaries, they can move any distance, knowing that the next turn's min distance will be half of what they have moved this time. On a ship's very first turn there is no previous move to halve, so its minimum is **half of its maximum**.
 
-A ship's maximum for a point of sail is the figure entered for it scaled by her speed multiplier, so that one decimal moves both ends of the range at once — a ship under full sail must commit to more way, not just be allowed more.
+A ship's maximum for a point of sail is the charts' figure for her type in this weather and scale, scaled by her speed multiplier, so that one decimal moves both ends of the range at once — a ship under full sail must commit to more way, not just be allowed more.
 
 The minimum is measured against the ship's base maximum for its point of sail, so it is a fixed number for the turn. The maximum, by contrast, drops 5% per turn point spent (see below) — so a plan with more than 10 turn points pushes the ceiling below the floor, which simply means that plan is not legal.
 
 The selected movement distance is split as evenly as possible in 5 chunks. The ship is allowed to turn port or starboard up to two times during the movement phase, at the end of a chunk. For instance it can move, turn, move, move, turn, move, move. 
 
-Turning is done in "points", knowing that a full 360 degrees circle is divided into 32 points (so 1 point = 11.25 degrees). Each ship has a maximum number of points per game round it can turn.
+Turning is done in "points", knowing that a full 360 degrees circle is divided into 32 points (so 1 point = 11.25 degrees). Each ship has a maximum number of points per game round it can turn, which the movement chart gives by her type.
 
 A turn is made the way the model is turned on the table: the ship **pivots about the rear corner of its base on the side it turns to** — the stern-port corner for a turn to port, the stern-starboard corner for a turn to starboard. That corner stays put and the rest of the base swings round it, so a turn shifts the ship's centre sideways and a little forward as well as changing its heading. This applies to every turn, including the swings of a declared tack. The displacement of a pivot is not distance sailed: it does not count toward the next turn's minimum move. For instance a 4th rate ship can turn 6 points, so it could, during its movement phase, turn 2 points then 4 points, for a total of 6 points; or turn 6 points in one go. It can also turn less than the maximum allowed.
 
@@ -105,9 +117,9 @@ The player declares a tack with a single button, which fills in the whole moveme
 
 ### Guns and range bands
 
-An arc's armament is a list of **gun profiles** rather than a single range and gun count — a broadside is rarely uniform, with long guns on the gun deck and carronades above, each reaching its own distances. Every profile gives a name, a number of guns, and the outer edge of four bands: **close, medium, long, extreme**. A shot falls in the first band whose distance it is still within, and beyond extreme the guns do not reach at all.
+An arc's armament is a list of **gun profiles** rather than a single range and gun count — a broadside is rarely uniform, with long guns on the gun deck and carronades above, each reaching its own distances. A profile is a gun type and a number of guns; the outer edge of five bands — **point blank, close, medium, long, extreme** — is read from the range charts for that type at the game's scale. A shot falls in the first band whose distance it is still within, and beyond extreme the guns do not reach at all.
 
-Distance costs accuracy, and the bands carry a to-hit modifier for it: close ×1, medium ×0.54, long ×0.4, extreme ×0.07. So what a shot is really worth is its **effective weight of metal** — each gun counted at its own band's modifier. That, not a raw count of guns, is what the AI weighs every shot and every position by, and it is what makes closing the range worth the risk of doing so.
+Distance costs accuracy, and the bands carry a to-hit modifier for it: point blank ×1.6, close ×1, medium ×0.54, long ×0.4, extreme ×0.07. Point blank is the one band the charts give no multiplier for — there every hit is automatic, where a close-range broadside still lands only the dice roll's share of itself, so muzzle to muzzle is worth about half again as much as close. So what a shot is really worth is its **effective weight of metal** — each gun counted at its own band's modifier. That, not a raw count of guns, is what the AI weighs every shot and every position by, and it is what makes closing the range worth the risk of doing so.
 
 ### When a ship fires
 

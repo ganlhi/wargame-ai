@@ -1,17 +1,24 @@
 import { v4 as uuid } from 'uuid'
 import { ATTITUDE_LABELS, SAILING_ATTITUDES } from '../utils/attitude'
-import { ARC_SIDES, RANGE_BANDS, RANGE_BAND_LABELS, RANGE_BAND_MODIFIERS, arcSideLabel } from '../types'
-import type { ArcSide, GunProfile, RangeBand } from '../types'
+import {
+  ARC_SIDES, GUN_TYPES, RANGE_BANDS, RANGE_BAND_LABELS, RANGE_BAND_MODIFIERS, SHIP_TYPES,
+  arcSideLabel,
+} from '../types'
+import type { ArcSide, GunProfile, GunType, Scale } from '../types'
+import {
+  DEFAULT_GUN_TYPE, GUN_TYPE_LABELS, SHIP_TYPE_INFO, WIND_STRENGTH_LABELS, gunRanges,
+} from '../data/binder'
+import type { Conditions } from '../game/shipStats'
+import { shipStats } from '../game/shipStats'
 import type { ShipSettingsDraft } from '../utils/shipSettingsDraft'
+import { Select } from './Select'
 
-function newGunProfile(): GunProfile {
-  return {
-    id: uuid(),
-    name: 'Guns',
-    guns: 10,
-    ranges: { close: 100, medium: 200, long: 300, extreme: 400 },
-  }
+function newGunProfile(scale: Scale): GunProfile {
+  return { id: uuid(), type: DEFAULT_GUN_TYPE, guns: 10, ranges: gunRanges(DEFAULT_GUN_TYPE, scale) }
 }
+
+const GUN_OPTIONS = GUN_TYPES.map((type) => ({ value: type, label: GUN_TYPE_LABELS[type] }))
+const SHIP_TYPE_OPTIONS = SHIP_TYPES.map((type) => ({ value: type, label: SHIP_TYPE_INFO[type].label }))
 
 const field =
   'w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500'
@@ -20,18 +27,22 @@ const smallField =
 
 /**
  * The guns in one arc. A ship rarely has a uniform broadside — long guns on the
- * gun deck, carronades above — and each kind reaches its own four distances, so
- * an arc is a list rather than a single range and count.
+ * gun deck, carronades above — so an arc is a list rather than a single entry;
+ * each is a gun out of the rulebook's charts and a number of them, and the
+ * distances it reaches follow from that and the game's scale.
  */
 function ArcGunsEditor({
   side,
   guns,
   onChange,
+  scale,
   mirror,
 }: {
   side: ArcSide
   guns: GunProfile[]
   onChange: (guns: GunProfile[]) => void
+  /** The scale the ranges shown are read at. */
+  scale: Scale
   /**
    * The opposite broadside, when this arc has one. Ships almost always carry the
    * same guns on both sides, so the second broadside is entered by copying the
@@ -42,12 +53,8 @@ function ArcGunsEditor({
   const update = (index: number, patch: Partial<GunProfile>) =>
     onChange(guns.map((g, i) => (i === index ? { ...g, ...patch } : g)))
 
-  const updateRange = (index: number, band: RangeBand, value: number) =>
-    onChange(
-      guns.map((g, i) =>
-        i === index ? { ...g, ranges: { ...g.ranges, [band]: Math.max(0, value) } } : g,
-      ),
-    )
+  const setType = (index: number, type: GunType) =>
+    update(index, { type, ranges: gunRanges(type, scale) })
 
   // Copies take fresh ids: a profile is keyed by its id within its arc, and the
   // two broadsides must stay editable independently once mirrored.
@@ -76,7 +83,7 @@ function ArcGunsEditor({
           )}
           <button
             type="button"
-            onClick={() => onChange([...guns, newGunProfile()])}
+            onClick={() => onChange([...guns, newGunProfile(scale)])}
             className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer"
           >
             + Add guns
@@ -89,25 +96,23 @@ function ArcGunsEditor({
       ) : (
         <div className="space-y-2 mt-2">
           {guns.map((profile, i) => {
-            // The bands have to widen outwards or the inner one swallows the
-            // next: a shot falls in the first band whose distance it is within.
-            const ascending = RANGE_BANDS.every(
-              (band, bi) => bi === 0 || profile.ranges[band] >= profile.ranges[RANGE_BANDS[bi - 1]],
-            )
+            const ranges = gunRanges(profile.type, scale)
             return (
               <div key={profile.id} className="bg-gray-900/60 rounded p-2">
                 <div className="flex items-center gap-1.5">
-                  <input
-                    type="text"
-                    value={profile.name}
-                    onChange={(e) => update(i, { name: e.target.value })}
-                    placeholder="24pdr"
-                    className="flex-1 min-w-0 bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                  <Select<GunType>
+                    value={profile.type}
+                    onChange={(type) => setType(i, type)}
+                    ariaLabel={`Gun in the ${arcSideLabel(side).toLowerCase()} arc`}
+                    size="sm"
+                    className="flex-1 min-w-0"
+                    options={GUN_OPTIONS}
                   />
                   <input
                     type="number"
                     min={0}
                     value={profile.guns}
+                    aria-label={`Number of ${GUN_TYPE_LABELS[profile.type]} in the ${arcSideLabel(side).toLowerCase()} arc`}
                     onChange={(e) => update(i, { guns: Math.max(0, Number(e.target.value)) })}
                     className="w-12 bg-gray-800 border border-gray-700 rounded px-1.5 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
                   />
@@ -115,34 +120,20 @@ function ArcGunsEditor({
                   <button
                     type="button"
                     onClick={() => onChange(guns.filter((_, gi) => gi !== i))}
-                    aria-label={`Remove ${profile.name || 'guns'} from the ${arcSideLabel(side).toLowerCase()} arc`}
+                    aria-label={`Remove ${GUN_TYPE_LABELS[profile.type]} from the ${arcSideLabel(side).toLowerCase()} arc`}
                     className="text-gray-500 hover:text-red-400 px-1 cursor-pointer"
                   >
                     ×
                   </button>
                 </div>
-                <div className="grid grid-cols-4 gap-1 mt-1.5">
+                <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1.5">
                   {RANGE_BANDS.map((band) => (
-                    <label key={band} className="flex flex-col gap-0.5">
-                      <span className="text-[10px] text-gray-500">
-                        {RANGE_BAND_LABELS[band]}
-                        {band !== 'close' && ` ×${RANGE_BAND_MODIFIERS[band]}`}
-                      </span>
-                      <input
-                        type="number"
-                        min={0}
-                        value={profile.ranges[band]}
-                        onChange={(e) => updateRange(i, band, Number(e.target.value))}
-                        className="w-full bg-gray-800 border border-gray-700 rounded px-1 py-1 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
-                      />
-                    </label>
+                    <span key={band} className="text-[10px] text-gray-500">
+                      {RANGE_BAND_LABELS[band]}{' '}
+                      <span className="text-gray-400">{ranges[band]}mm</span>
+                    </span>
                   ))}
                 </div>
-                {!ascending && (
-                  <p className="text-xs text-amber-500 mt-1">
-                    Ranges should grow outwards; a band shorter than the one inside it never applies.
-                  </p>
-                )}
               </div>
             )
           })}
@@ -156,19 +147,21 @@ function ArcGunsEditor({
 export function GunsFields({
   arcGuns,
   onChange,
+  scale,
 }: {
   arcGuns: Record<ArcSide, GunProfile[]>
   onChange: (arcGuns: Record<ArcSide, GunProfile[]>) => void
+  /** The scale the ranges shown are read at. */
+  scale: Scale
 }) {
   return (
     <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50 space-y-3">
       <div>
         <div className="text-xs text-gray-400 font-medium">Guns</div>
         <p className="text-xs text-gray-500 mt-0.5">
-          An arc can carry several kinds of gun, each reaching its own distances. Past close
-          range a shot is worth a fraction of itself &mdash;{' '}
-          {RANGE_BANDS.filter((b) => b !== 'close')
-            .map((b) => `${RANGE_BAND_LABELS[b].toLowerCase()} ×${RANGE_BAND_MODIFIERS[b]}`)
+          Pick the gun and say how many; the distances below are the rulebook's, at {scale}.
+          What a shot is worth falls away with the range &mdash;{' '}
+          {RANGE_BANDS.map((b) => `${RANGE_BAND_LABELS[b].toLowerCase()} ×${RANGE_BAND_MODIFIERS[b]}`)
             .join(', ')}{' '}
           &mdash; which is what the AI weighs a shot by when it decides whether, and when in
           the move, to fire.
@@ -184,6 +177,7 @@ export function GunsFields({
             key={arcSide}
             side={arcSide}
             guns={arcGuns[arcSide]}
+            scale={scale}
             onChange={(guns) => onChange({ ...arcGuns, [arcSide]: guns })}
             mirror={mirrorSide && { side: mirrorSide, guns: arcGuns[mirrorSide] }}
           />
@@ -194,34 +188,94 @@ export function GunsFields({
 }
 
 /**
- * The fields for what is a ship's own whatever game she is in — her turning,
- * rig, base, speeds and drift. Shared by the unit form and the saved-ship
- * form, so a class is edited the same way wherever it is met. Guns are a
- * separate block ({@link GunsFields}) because the unit form only shows them
- * for AI ships.
+ * What the charts give this ship in this game: her speed on every point of
+ * sail, her drift and her turning. Read-only — the whole point of choosing a
+ * type is that these are not typed in — but worth showing, since they are what
+ * the movement panel will hold her to.
+ */
+function ChartedFigures({
+  draft,
+  conditions,
+}: {
+  draft: ShipSettingsDraft
+  conditions: Conditions
+}) {
+  const stats = shipStats(draft.shipType, conditions)
+  const scaled = (max: number) => Math.round((max * draft.speedPercent) / 100)
+
+  return (
+    <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
+      <div className="text-xs text-gray-400 font-medium">
+        From the charts &mdash; {conditions.scale},{' '}
+        {WIND_STRENGTH_LABELS[conditions.windStrength].toLowerCase()}
+      </div>
+      <div className="space-y-1 mt-2">
+        {SAILING_ATTITUDES.map((att) => (
+          <div key={att} className="flex justify-between gap-2 text-xs">
+            <span className="text-gray-300">{ATTITUDE_LABELS[att]}</span>
+            <span className="text-gray-400">
+              {scaled(stats.speedProfile[att].max)}mm
+              {draft.speedPercent !== 100 && (
+                <span className="text-gray-600"> of {stats.speedProfile[att].max}</span>
+              )}
+            </span>
+          </div>
+        ))}
+        <div className="flex justify-between gap-2 text-xs pt-1 border-t border-gray-700/50">
+          <span className="text-gray-300">Drifting, with no way on</span>
+          <span className="text-gray-400">{stats.driftSpeed}mm</span>
+        </div>
+      </div>
+      <p className="text-xs text-gray-500 mt-2">
+        Millimetres for a whole turn, best point of sail first. In irons is not listed: head to
+        wind she carries no way of her own and drifts instead.
+      </p>
+    </div>
+  )
+}
+
+/**
+ * The fields for what is a ship's own whatever game she is in — her type, rig,
+ * base and how hard she is being worked. Shared by the unit form and the
+ * saved-ship form, so a class is edited the same way wherever it is met. Guns
+ * are a separate block ({@link GunsFields}) because the unit form only shows
+ * them for AI ships.
+ *
+ * `conditions` is the game she is in, when she is in one. The library on the
+ * home page belongs to no game, so there her speeds cannot be quoted — only
+ * her turning, which the charts give by type alone.
  */
 export function ShipSettingsFields({
   draft,
   onChange,
+  conditions,
 }: {
   draft: ShipSettingsDraft
   onChange: (draft: ShipSettingsDraft) => void
+  conditions?: Conditions
 }) {
   const patch = (changes: Partial<ShipSettingsDraft>) => onChange({ ...draft, ...changes })
-  const bestSpeed = Math.max(...SAILING_ATTITUDES.map((a) => draft.speedProfile[a].max))
+  const turnPoints = SHIP_TYPE_INFO[draft.shipType].turnPoints
 
   return (
     <>
       <div>
-        <label className="block text-xs text-gray-400 mb-1">Max Turn Points</label>
-        <input
-          type="number"
-          min={0}
-          max={32}
-          value={draft.maxTurnPoints}
-          onChange={(e) => patch({ maxTurnPoints: Number(e.target.value) })}
-          className={field}
+        <label className="block text-xs text-gray-400 mb-1">Type</label>
+        <Select
+          value={draft.shipType}
+          onChange={(shipType) => patch({ shipType })}
+          ariaLabel="Ship type"
+          className="w-full"
+          options={SHIP_TYPE_OPTIONS}
         />
+        <p className="text-xs text-gray-500 mt-1">
+          How she sails follows from this: her speeds and her drift come from the rulebook's
+          charts, and she may turn{' '}
+          <span className="text-gray-300">
+            {turnPoints} point{turnPoints === 1 ? '' : 's'}
+          </span>{' '}
+          in a turn.
+        </p>
       </div>
 
       <div>
@@ -275,64 +329,23 @@ export function ShipSettingsFields({
         Footprint of the model's base. The AI won't let its base overlap another ship's.
       </p>
 
-      <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50">
-        <div className="text-xs text-gray-400 font-medium mb-2">Max Speed per Attitude (mm/turn)</div>
-        <div className="space-y-1.5">
-          {SAILING_ATTITUDES.map((att) => (
-            <div key={att} className="grid grid-cols-3 gap-1 items-center">
-              <span className="text-xs text-gray-300">{ATTITUDE_LABELS[att]}</span>
-              <input
-                type="number"
-                min={0}
-                value={draft.speedProfile[att].max}
-                onChange={(e) =>
-                  patch({
-                    speedProfile: {
-                      ...draft.speedProfile,
-                      [att]: { max: Math.max(0, Number(e.target.value)) },
-                    },
-                  })
-                }
-                className={smallField}
-                placeholder="Max"
-              />
-              <span className="text-xs text-gray-500">mm</span>
-            </div>
-          ))}
-        </div>
-        <p className="text-xs text-gray-500 mt-2">
-          Best to worst. In irons is not listed: head to wind a ship carries no way of her own
-          and drifts instead, at the speed below.
-        </p>
-        <div className="grid grid-cols-3 gap-1 items-center mt-2 pt-2 border-t border-gray-700/50">
-          <span className="text-xs text-gray-300">Multiplier</span>
-          <input
-            type="number"
-            min={0}
-            step={1}
-            value={draft.speedPercent}
-            onChange={(e) => patch({ speedPercent: Math.max(0, Math.round(Number(e.target.value))) })}
-            className={smallField}
-          />
-          <span className="text-xs text-gray-500">%</span>
-        </div>
-        <p className="text-xs text-gray-500 mt-1">
-          Scales every figure above &mdash; 100% as entered, less for a ship shortened down,
-          more for one under full sail. Her best point of sail comes out at{' '}
-          <span className="text-gray-300">{Math.round((bestSpeed * draft.speedPercent) / 100)}mm</span>.
-        </p>
-      </div>
-
       <div>
-        <label className="block text-xs text-gray-400 mb-1">Drift Speed (mm/chunk, when in irons)</label>
+        <label className="block text-xs text-gray-400 mb-1">Sail set (%)</label>
         <input
           type="number"
           min={0}
-          value={draft.driftSpeed}
-          onChange={(e) => patch({ driftSpeed: Math.max(0, Number(e.target.value)) })}
-          className={field}
+          step={1}
+          value={draft.speedPercent}
+          onChange={(e) => patch({ speedPercent: Math.max(0, Math.round(Number(e.target.value))) })}
+          className={smallField}
         />
+        <p className="text-xs text-gray-500 mt-1">
+          Scales every speed the charts give her &mdash; 100% as charted, less for a ship
+          shortened down, more for one under full sail.
+        </p>
       </div>
+
+      {conditions && <ChartedFigures draft={draft} conditions={conditions} />}
     </>
   )
 }

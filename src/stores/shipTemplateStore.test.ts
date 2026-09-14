@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { ShipSettings } from '../types'
+import { gunRanges } from '../data/binder'
 
 // The store reaches for localStorage at import time (zustand `persist`), so a
 // tiny in-memory stand-in keeps this in the default node environment.
@@ -18,24 +19,16 @@ const { useShipTemplateStore } = await import('./shipTemplateStore')
 const { cloneShipSettings } = await import('../utils/shipTemplates')
 
 const settings = (overrides: Partial<ShipSettings> = {}): ShipSettings => ({
-  maxTurnPoints: 6,
+  shipType: 'rate_3',
   foreAndAftRigged: false,
-  speedProfile: {
-    in_irons: { max: 0 },
-    beating: { max: 60 },
-    reaching: { max: 100 },
-    quarter_reaching: { max: 120 },
-    running: { max: 110 },
-  },
   speedMultiplier: 1,
-  driftSpeed: 10,
   baseWidth: 30,
   baseLength: 80,
   firingArcs: [
     {
       id: 'arc-port',
       side: 'port',
-      guns: [{ id: 'g1', name: '24pdr', guns: 14, ranges: { close: 100, medium: 200, long: 300, extreme: 400 } }],
+      guns: [{ id: 'g1', type: 'long_24', guns: 14, ranges: gunRanges('long_24', '1/1200') }],
     },
   ],
   ...overrides,
@@ -80,10 +73,9 @@ describe('ship template store', () => {
     expect(templates[0].baseLength).toBe(95)
   })
 
-  it('pins in irons to 0 and copies rather than shares the settings it is given', () => {
-    const source = settings({ speedProfile: { ...settings().speedProfile, in_irons: { max: 25 } } })
-    const saved = useShipTemplateStore.getState().saveTemplate('Brig', source)
-    expect(saved.speedProfile.in_irons.max).toBe(0)
+  it('copies rather than shares the settings it is given', () => {
+    const source = settings()
+    useShipTemplateStore.getState().saveTemplate('Brig', source)
     source.firingArcs[0].guns[0].guns = 99
     expect(useShipTemplateStore.getState().templates[0].firingArcs[0].guns[0].guns).toBe(14)
   })

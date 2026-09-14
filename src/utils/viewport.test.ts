@@ -8,7 +8,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
   return {
     id: 'u1', name: 'Test', side: 'player',
     position: { x: 0, y: 0 }, orientation: 0, status: 'active', aiStyle: 'cautious',
-    maxTurnPoints: 6,
+    shipType: 'rate_4', maxTurnPoints: 6,
     foreAndAftRigged: false,
     speedProfile: {
       in_irons: { max: 0 }, beating: { max: 60 }, reaching: { max: 80 },
@@ -27,7 +27,8 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
 function makeGame(overrides: Partial<GameState> = {}): GameState {
   return {
     id: 'g1', name: 'Test', createdAt: '', updatedAt: '', schemaVersion: 6,
-    originId: null, windDirection: 0, terrain: [], units: [],
+    originId: null, windDirection: 0, windStrength: 'moderate_breeze', scale: '1/1200',
+    terrain: [], units: [],
     currentTurn: 1, currentPhase: 'setup', actionLog: [],
     ...overrides,
   }

@@ -1,7 +1,10 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { v4 as uuid } from 'uuid'
-import type { SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry, MovementPlan } from '../types'
+import type {
+  SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry, MovementPlan, Scale,
+  WindStrength,
+} from '../types'
 import { applyMovementPlan, turnOrderFor } from '../game/movement'
 import { suggestMovement, decideAggressiveAction } from '../game/ai'
 import { computeAIFirePlan } from '../game/combat'
@@ -9,13 +12,15 @@ import { applyGrapple, clearGrappleForRemoved } from '../game/grapple'
 import { computeAttitude } from '../utils/attitude'
 import { formatWorldPoint, sternMidpoint } from '../utils/coordinates'
 import { migrateSavedGame, CURRENT_SCHEMA_VERSION } from './migrations'
+import { conditionsOf, resolveGame, resolveUnit } from '../game/shipStats'
+import { WIND_STRENGTH_LABELS } from '../data/binder'
 
 interface GameStore {
   savedGames: SavedGame[]
   currentGame: GameState | null
   hasUnsavedChanges: boolean
 
-  createGame: (name: string) => string
+  createGame: (name: string, scale: Scale) => string
   loadGame: (id: string) => void
   deleteGame: (id: string) => void
   saveCurrentGame: () => void
@@ -23,6 +28,9 @@ interface GameStore {
   markChanged: () => void
 
   setWindDirection: (direction: number) => void
+  setWindStrength: (strength: WindStrength) => void
+  planAIOrders: () => void
+  setScale: (scale: Scale) => void
   setPhase: (phase: GamePhase) => void
   nextTurn: () => void
   setOrigin: (id: string) => void
@@ -61,7 +69,7 @@ function reassignOrigin(
   return units[0]?.id ?? terrain[0]?.id ?? null
 }
 
-function createInitialGame(name: string): GameState {
+function createInitialGame(name: string, scale: Scale): GameState {
   const id = uuid()
   const timestamp = now()
   return {
@@ -72,6 +80,8 @@ function createInitialGame(name: string): GameState {
     schemaVersion: CURRENT_SCHEMA_VERSION,
     originId: null,
     windDirection: 0,
+    windStrength: 'moderate_breeze',
+    scale,
     terrain: [],
     units: [],
     currentTurn: 1,
@@ -87,8 +97,8 @@ export const useGameStore = create<GameStore>()(
       currentGame: null,
       hasUnsavedChanges: false,
 
-      createGame: (name) => {
-        const game = createInitialGame(name)
+      createGame: (name, scale) => {
+        const game = createInitialGame(name, scale)
         set((state) => ({
           savedGames: [
             ...state.savedGames,
@@ -175,6 +185,84 @@ export const useGameStore = create<GameStore>()(
         })
       },
 
+      /**
+       * Change the weather. Every ship's speeds are read from the charts
+       * against it, so the whole fleet is re-rated on the spot — and with it
+       * every plan already laid, which was measured out against speeds that no
+       * longer apply. A ship ordered 320mm in a moderate breeze cannot make a
+       * third of that in a slight air, so the orders go and are laid again: the
+       * AI's at once, the player's for them to enter afresh. A turn already
+       * revealed goes back to its orders phase, since what was revealed no
+       * longer holds.
+       */
+      setWindStrength: (strength) => {
+        const game = get().currentGame
+        if (!game || game.windStrength === strength) return
+        const underWay = game.currentPhase === 'orders' || game.currentPhase === 'reveal'
+        set({
+          currentGame: resolveGame({
+            ...game,
+            windStrength: strength,
+            units: game.units.map((u) => ({
+              ...u,
+              playerOrder: null,
+              hiddenAIOrder: null,
+              hiddenAIFirePlan: null,
+              hiddenAIAction: null,
+            })),
+            currentPhase: game.currentPhase === 'reveal' ? 'orders' : game.currentPhase,
+            actionLog: underWay
+              ? [
+                  ...game.actionLog,
+                  {
+                    turn: game.currentTurn,
+                    text: `Wind ${WIND_STRENGTH_LABELS[strength].toLowerCase()} — orders laid again`,
+                  },
+                ]
+              : game.actionLog,
+            updatedAt: now(),
+          }),
+          hasUnsavedChanges: true,
+        })
+        if (underWay) get().planAIOrders()
+      },
+
+      /**
+       * Change the scale. Only offered while the table is still empty — the
+       * charts' distances change with it, and positions already measured out
+       * in millimetres would no longer mean the same thing.
+       */
+      setScale: (scale) => {
+        const game = get().currentGame
+        if (!game) return
+        set({
+          currentGame: resolveGame({ ...game, scale, updatedAt: now() }),
+          hasUnsavedChanges: true,
+        })
+      },
+
+      /**
+       * Give every AI ship an order for the turn as it now stands. Called
+       * whenever what a ship could do has changed under her — a new turn, a
+       * game starting, the weather turning.
+       */
+      planAIOrders: () => {
+        const game = get().currentGame
+        if (!game) return
+        for (const u of game.units) {
+          if (u.side !== 'ai') continue
+          const order = suggestMovement(
+            u,
+            game.units,
+            game.terrain,
+            game.windDirection,
+            u.prevAttitude,
+            1,
+          )
+          get().updateUnit(u.id, { hiddenAIOrder: order })
+        }
+      },
+
       setPhase: (phase) => {
         const game = get().currentGame
         if (!game) return
@@ -248,7 +336,7 @@ export const useGameStore = create<GameStore>()(
         set({
           currentGame: {
             ...game,
-            units: [...game.units, unit],
+            units: [...game.units, resolveUnit(unit, conditionsOf(game))],
             // First entity placed defines the origin for everything else.
             originId: game.originId ?? unit.id,
             updatedAt: now(),
@@ -263,7 +351,9 @@ export const useGameStore = create<GameStore>()(
         set({
           currentGame: {
             ...game,
-            units: game.units.map((u) => (u.id === id ? { ...u, ...updates } : u)),
+            units: game.units.map((u) =>
+              u.id === id ? resolveUnit({ ...u, ...updates }, conditionsOf(game)) : u,
+            ),
             updatedAt: now(),
           },
           hasUnsavedChanges: true,
@@ -325,22 +415,7 @@ export const useGameStore = create<GameStore>()(
           },
           hasUnsavedChanges: true,
         })
-        const updated = get().currentGame
-        if (updated) {
-          for (const u of updated.units) {
-            if (u.side === 'ai') {
-              const order = suggestMovement(
-                u,
-                updated.units,
-                updated.terrain,
-                updated.windDirection,
-                u.prevAttitude,
-                1,
-              )
-              get().updateUnit(u.id, { hiddenAIOrder: order })
-            }
-          }
-        }
+        get().planAIOrders()
       },
 
       revealOrders: () => {
@@ -458,22 +533,7 @@ export const useGameStore = create<GameStore>()(
           hasUnsavedChanges: true,
         })
 
-        const updated = get().currentGame
-        if (updated) {
-          for (const u of updated.units) {
-            if (u.side === 'ai') {
-              const order = suggestMovement(
-                u,
-                updated.units,
-                updated.terrain,
-                updated.windDirection,
-                u.prevAttitude,
-                1,
-              )
-              get().updateUnit(u.id, { hiddenAIOrder: order })
-            }
-          }
-        }
+        get().planAIOrders()
       },
     }),
     {

@@ -4,6 +4,50 @@ export type UnitStatus = 'active' | 'grappled' | 'immobilised' | 'destroyed' | '
 
 export type Attitude = 'in_irons' | 'beating' | 'reaching' | 'quarter_reaching' | 'running'
 
+/**
+ * The scale the models are built to. Everything the binder gives — gun ranges
+ * and sailing speeds alike — is tabulated for both, so it is a property of the
+ * game rather than of any one ship, fixed when the game is created.
+ */
+export const SCALES = ['1/700', '1/1200'] as const
+export type Scale = (typeof SCALES)[number]
+
+/**
+ * How hard it is blowing. Speeds are read from the binder's charts by ship
+ * category *and* wind strength, so this is as much a part of a game's state as
+ * the wind's direction — and, like it, may change as the game goes on.
+ */
+export const WIND_STRENGTHS = [
+  'slight_air', 'light_breeze', 'gentle_breeze', 'moderate_breeze', 'fresh_breeze', 'gale',
+] as const
+export type WindStrength = (typeof WIND_STRENGTHS)[number]
+
+/**
+ * What kind of ship she is. This is all that is entered about how she sails:
+ * her speeds on every point of sail, her drift and how many points she can
+ * turn in a game turn are read from the binder's charts from this, the game's
+ * scale and the wind strength. See `src/data/binder.ts`.
+ */
+export const SHIP_TYPES = [
+  'rate_1', 'rate_2', 'rate_3', 'rate_4', 'large_frigate', 'rate_5', 'rate_6',
+  'sloop', 'xebec', 'brig', 'snow', 'bomb_ketch', 'pojama', 'galley', 'gondola', 'polacca',
+  'schooner', 'lugger', 'cutter', 'gunboat', 'dhow', 'baghala', 'trabacolo', 'proa', 'batil',
+  'galivat', 'colonial_sloop',
+] as const
+export type ShipType = (typeof SHIP_TYPES)[number]
+
+/**
+ * A kind of gun from the binder's range charts. A gun's four band edges follow
+ * from this and the game's scale, so choosing the type and saying how many
+ * there are is the whole of entering an armament.
+ */
+export const GUN_TYPES = [
+  'long_48', 'long_42', 'long_36_livre', 'long_36', 'long_32', 'long_30', 'long_29', 'long_24',
+  'long_18', 'long_12', 'long_9', 'long_8', 'long_6', 'long_4', 'long_3', 'swivel_half',
+  'carr_68', 'carr_42', 'carr_36', 'carr_32', 'carr_24', 'carr_18', 'carr_12',
+] as const
+export type GunType = (typeof GUN_TYPES)[number]
+
 export type TerrainType = 'island' | 'shoal' | 'reef'
 
 export type UnitSide = 'player' | 'ai'
@@ -74,17 +118,24 @@ export function arcSideLabel(side: ArcSide): string {
   }
 }
 
-export const RANGE_BANDS = ['close', 'medium', 'long', 'extreme'] as const
+export const RANGE_BANDS = ['point_blank', 'close', 'medium', 'long', 'extreme'] as const
 export type RangeBand = (typeof RANGE_BANDS)[number]
 
 /**
  * To-hit modifier for a shot taken in each band. Close range is the yardstick;
- * beyond it a shot is worth a fraction of the same broadside fired at point
- * blank, and an extreme-range one is barely worth the powder. These are what
- * make closing the range worth the risk of doing so, so the AI weighs every
- * candidate shot by them rather than by a raw count of guns.
+ * beyond it a shot is worth a fraction of itself, and an extreme-range one is
+ * barely worth the powder. These are what make closing the range worth the
+ * risk of doing so, so the AI weighs every candidate shot by them rather than
+ * by a raw count of guns.
+ *
+ * Point blank is the one band the binder does not give a multiplier for: at
+ * that range every hit is automatic, where a close-range broadside still lands
+ * only the dice roll's share of itself (×1.0 with +13 on a d100, so about two
+ * thirds on average). Muzzle to muzzle is therefore worth about half again as
+ * much as close, which is the figure used here.
  */
 export const RANGE_BAND_MODIFIERS: Record<RangeBand, number> = {
+  point_blank: 1.6,
   close: 1,
   medium: 0.54,
   long: 0.4,
@@ -92,6 +143,7 @@ export const RANGE_BAND_MODIFIERS: Record<RangeBand, number> = {
 }
 
 export const RANGE_BAND_LABELS: Record<RangeBand, string> = {
+  point_blank: 'Point Blank',
   close: 'Close',
   medium: 'Medium',
   long: 'Long',
@@ -99,18 +151,26 @@ export const RANGE_BAND_LABELS: Record<RangeBand, string> = {
 }
 
 /**
- * One kind of gun in an arc. A broadside is rarely uniform — 24-pounders on the
- * gun deck and carronades on the quarterdeck reach quite different distances —
- * so an arc carries a list of these rather than a single range and gun count.
- *
- * `ranges` gives the *outer* edge of each band, so a shot falls in the first
- * band whose distance it is still within, and `ranges.extreme` is how far the
- * guns reach at all.
+ * One kind of gun in an arc, and how many of them. A broadside is rarely
+ * uniform — 24-pounders on the gun deck and carronades on the quarterdeck
+ * reach quite different distances — so an arc carries a list of these rather
+ * than a single range and gun count.
  */
 export interface GunProfile {
   id: string
-  name: string
+  /** Which gun out of the binder's charts; its label and ranges follow from it. */
+  type: GunType
   guns: number
+  /**
+   * The *outer* edge of each band, so a shot falls in the first band whose
+   * distance it is still within, and `ranges.extreme` is how far the guns
+   * reach at all.
+   *
+   * Read from the binder for `type` at the game's scale rather than entered,
+   * and rewritten from there on every write — see `resolveUnitStats`. A value
+   * that came off disk (or out of a saved ship, which belongs to no game and
+   * so to no scale) is never to be trusted.
+   */
   ranges: Record<RangeBand, number>
 }
 
@@ -202,6 +262,15 @@ export interface Unit {
   orientation: number
   status: UnitStatus
   aiStyle: AIStyle
+  /**
+   * What kind of ship she is. Her speeds, her drift and her turning all come
+   * from the binder's charts for this, so it is entered in place of them.
+   */
+  shipType: ShipType
+  /**
+   * Points she may turn in a game turn. From the binder's movement chart for
+   * her `shipType`; see `resolveUnitStats`, which rewrites it on every write.
+   */
   maxTurnPoints: number
   /**
    * Fore-and-aft rigged ships point one point closer to the wind: they are in
@@ -213,6 +282,10 @@ export interface Unit {
    * Top speed on each point of sail. `in_irons` is always 0: a ship head to
    * wind carries no way of her own and goes where the wind takes her, at
    * `driftSpeed`, so there is no sailing speed to quote.
+   *
+   * Read from the binder's sailing charts for her `shipType` at the game's
+   * scale and wind strength, not entered, and rewritten from there on every
+   * write — see `resolveUnitStats`.
    */
   speedProfile: Record<Attitude, SpeedRange>
   /**
@@ -221,6 +294,10 @@ export interface Unit {
    * below it shortened down, above it under full sail, 0 = dead in the water.
    */
   speedMultiplier: number
+  /**
+   * How far the wind carries her in a turn with no way on. From the binder's
+   * charts alongside `speedProfile`, and derived the same way.
+   */
   driftSpeed: number
   // Footprint of the physical base the model is mounted on, in mm. `baseLength`
   // runs along the bow–stern axis, `baseWidth` across (port–starboard). Used for
@@ -262,17 +339,17 @@ export interface Unit {
 }
 
 /**
- * What is the ship's own, whichever game she is in: her rig, how she sails,
- * her base and her guns. Where she stands, which way she heads, whose side she
- * fights on and how she is faring belong to the game and are left out.
+ * What is the ship's own, whichever game she is in: her type, her rig, her
+ * base and her guns. Where she stands, which way she heads, whose side she
+ * fights on and how she is faring belong to the game and are left out — and so
+ * do her actual speeds and ranges, which belong to the game's scale and
+ * weather and are read from the binder wherever she turns up.
  */
 export type ShipSettings = Pick<
   Unit,
-  | 'maxTurnPoints'
+  | 'shipType'
   | 'foreAndAftRigged'
-  | 'speedProfile'
   | 'speedMultiplier'
-  | 'driftSpeed'
   | 'baseWidth'
   | 'baseLength'
   | 'firingArcs'
@@ -326,6 +403,17 @@ export interface GameState {
    */
   originId: string | null
   windDirection: number
+  /**
+   * How hard it is blowing. With `scale`, this is what every ship's speeds are
+   * read from, so changing it re-rates the whole fleet at once.
+   */
+  windStrength: WindStrength
+  /**
+   * The scale the models are built to. Gun ranges and speeds are tabulated for
+   * both scales, and positions are measured in millimetres on the table, so
+   * this is fixed when the game is created.
+   */
+  scale: Scale
   terrain: TableTerrain[]
   units: Unit[]
   currentTurn: number

@@ -42,7 +42,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     orientation: 8,
     status: 'active',
     aiStyle: 'aggressive',
-    maxTurnPoints: 6,
+    shipType: 'rate_4', maxTurnPoints: 6,
     foreAndAftRigged: false,
     speedProfile: SPEED_PROFILE,
     speedMultiplier: 1,

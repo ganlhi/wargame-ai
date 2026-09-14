@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import type { GameState, SavedGame, ShipTemplate } from '../types'
 import { CURRENT_SCHEMA_VERSION } from '../stores/migrations'
+import { DEFAULT_SHIP_TYPE, REFERENCE_SCALE, nearestGunType } from '../data/binder'
 import { DriveApiError, type DriveClient, type DriveFileMeta, type DriveFolder } from './driveClient'
 import {
   DriveSyncer,
@@ -87,6 +88,8 @@ function makeGame(id: string, name: string, createdAt = '2026-01-01T00:00:00.000
     schemaVersion: CURRENT_SCHEMA_VERSION,
     originId: null,
     windDirection: 0,
+    windStrength: 'moderate_breeze',
+    scale: '1/1200',
     terrain: [],
     units: [],
     currentTurn: 1,
@@ -101,17 +104,9 @@ function makeTemplate(id: string, name: string): ShipTemplate {
     name,
     createdAt: '2026-01-01T00:00:00.000Z',
     updatedAt: '2026-01-01T00:00:00.000Z',
-    maxTurnPoints: 6,
+    shipType: 'rate_3',
     foreAndAftRigged: false,
-    speedProfile: {
-      in_irons: { max: 0 },
-      beating: { max: 60 },
-      reaching: { max: 100 },
-      quarter_reaching: { max: 120 },
-      running: { max: 110 },
-    },
     speedMultiplier: 1,
-    driftSpeed: 10,
     baseWidth: 30,
     baseLength: 80,
     firingArcs: [],
@@ -265,11 +260,14 @@ describe('DriveSyncer — pulling', () => {
     expect(snapshot).not.toBeNull()
     expect(snapshot!.savedGames).toEqual([])
     expect(snapshot!.templates!.map((t) => t.id)).toEqual(['t1', 't3'])
-    // A sparse template is filled in with the unit defaults and its arcs migrated.
+    // A sparse template is filled in with the unit defaults and its arcs
+    // migrated: a pre-charts arc knows only how far it reached, so it takes the
+    // gun that reaches about as far.
     const bare = snapshot!.templates![1]
     expect(bare.baseLength).toBe(80)
-    expect(bare.speedProfile.in_irons.max).toBe(0)
+    expect(bare.shipType).toBe(DEFAULT_SHIP_TYPE)
     expect(bare.firingArcs[0].guns[0].guns).toBe(12)
+    expect(bare.firingArcs[0].guns[0].type).toBe(nearestGunType(300, REFERENCE_SCALE))
     expect(await syncer.countRemoteGames()).toBe(0)
   })
 })

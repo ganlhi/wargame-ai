@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useShipTemplateStore } from '../stores/shipTemplateStore'
 import { deleteShipTemplate, saveShipTemplate } from '../sync/syncActions'
-import { SAILING_ATTITUDES } from '../utils/attitude'
 import { arcGunCount } from '../types'
 import type { ShipTemplate } from '../types'
+import { REFERENCE_SCALE, SHIP_TYPE_INFO } from '../data/binder'
 import { speedMultiplierToPercent } from '../game/movement'
 import { findTemplateByName } from '../utils/shipTemplates'
 import { GunsFields, ShipSettingsFields } from './ShipSettingsFields'
@@ -11,16 +11,22 @@ import { draftFromSettings, settingsFromDraft } from '../utils/shipSettingsDraft
 
 const plural = (n: number, word: string) => `${n} ${word}${n === 1 ? '' : 's'}`
 
-/** The one line under a ship's name in the list: her rig, how fast she is, and what she carries. */
+/**
+ * The one line under a ship's name in the list: what she is, how she is
+ * rigged, and what she carries. No speeds: those are the charts' to give, and
+ * the charts are read against a game's scale and weather, which the library
+ * knows nothing of.
+ */
 function summarise(t: ShipTemplate): string {
-  const best = Math.max(...SAILING_ATTITUDES.map((a) => t.speedProfile[a].max))
-  const multiplied = Math.round((best * speedMultiplierToPercent(t.speedMultiplier)) / 100)
+  const info = SHIP_TYPE_INFO[t.shipType]
   const guns = t.firingArcs.reduce((n, arc) => n + arcGunCount(arc), 0)
+  const percent = speedMultiplierToPercent(t.speedMultiplier)
   return [
-    t.foreAndAftRigged ? 'Fore & aft' : 'Square rig',
-    `${multiplied}mm best`,
-    `${t.maxTurnPoints}pt turn`,
+    info.label,
+    t.foreAndAftRigged ? 'fore & aft' : 'square rig',
+    `${info.turnPoints}pt turn`,
     guns > 0 ? plural(guns, 'gun') : 'no guns',
+    ...(percent === 100 ? [] : [`${percent}% sail`]),
   ].join(' · ')
 }
 
@@ -39,7 +45,7 @@ function ShipTemplateFormModal({
 }) {
   const templates = useShipTemplateStore((s) => s.templates)
   const [name, setName] = useState(template?.name ?? '')
-  const [draft, setDraft] = useState(() => draftFromSettings(template))
+  const [draft, setDraft] = useState(() => draftFromSettings(template, REFERENCE_SCALE))
   const [confirmDelete, setConfirmDelete] = useState(false)
 
   // Two saved ships must not share a name, or a pick from the list would be
@@ -66,8 +72,10 @@ function ShipTemplateFormModal({
       <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 mx-2 max-w-md w-full max-h-[90vh] overflow-y-auto">
         <h2 className="text-base font-semibold mb-1">{template ? 'Edit Saved Ship' : 'New Saved Ship'}</h2>
         <p className="text-xs text-gray-500 mb-4">
-          What is saved is the ship's own: rig, turning, speeds, base and guns. Position, heading
-          and side are set when she is added to a game.
+          What is saved is the ship's own: her type, rig, base and guns. Position, heading and
+          side are set when she is added to a game &mdash; as are her speeds and ranges, which
+          the rulebook gives against that game's scale and weather. The distances below are
+          shown at {REFERENCE_SCALE} for comparison.
         </p>
         <form onSubmit={handleSubmit} className="space-y-3.5">
           <div>
@@ -88,7 +96,11 @@ function ShipTemplateFormModal({
           </div>
 
           <ShipSettingsFields draft={draft} onChange={setDraft} />
-          <GunsFields arcGuns={draft.arcGuns} onChange={(arcGuns) => setDraft({ ...draft, arcGuns })} />
+          <GunsFields
+            arcGuns={draft.arcGuns}
+            scale={REFERENCE_SCALE}
+            onChange={(arcGuns) => setDraft({ ...draft, arcGuns })}
+          />
 
           <div className="flex gap-2 pt-2 items-center flex-wrap">
             <button

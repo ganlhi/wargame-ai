@@ -7,24 +7,26 @@ import type { FiringArc, GunProfile } from './index'
 
 const longGuns: GunProfile = {
   id: 'g1',
-  name: '24pdr',
+  type: 'long_24',
   guns: 10,
-  ranges: { close: 100, medium: 200, long: 300, extreme: 400 },
+  ranges: { point_blank: 20, close: 100, medium: 200, long: 300, extreme: 400 },
 }
 
 /** Heavy but short: carronades smash at close quarters and reach no further. */
 const carronades: GunProfile = {
   id: 'g2',
-  name: 'Carronade',
+  type: 'carr_32',
   guns: 6,
-  ranges: { close: 80, medium: 120, long: 150, extreme: 150 },
+  ranges: { point_blank: 20, close: 80, medium: 120, long: 150, extreme: 150 },
 }
 
 const broadside: FiringArc = { id: 'a', side: 'starboard', guns: [longGuns, carronades] }
 
 describe('bandForDistance', () => {
   it('takes the first band the range is still within', () => {
-    expect(bandForDistance(longGuns, 0)).toBe('close')
+    expect(bandForDistance(longGuns, 0)).toBe('point_blank')
+    expect(bandForDistance(longGuns, 20)).toBe('point_blank')
+    expect(bandForDistance(longGuns, 21)).toBe('close')
     expect(bandForDistance(longGuns, 100)).toBe('close')
     expect(bandForDistance(longGuns, 101)).toBe('medium')
     expect(bandForDistance(longGuns, 300)).toBe('long')

@@ -1,6 +1,10 @@
 import { useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
 import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
+import { SCALES, WIND_STRENGTHS } from '../types'
+import { WIND_STRENGTH_LABELS } from '../data/binder'
+import { Select } from './Select'
+import type { WindStrength } from '../types'
 
 const WIND_POINTS = Array.from({ length: 32 }, (_, i) => i)
 
@@ -9,7 +13,7 @@ interface GameSetupProps {
 }
 
 export function GameSetup({ onComplete }: GameSetupProps) {
-  const { currentGame, setWindDirection } = useGameStore()
+  const { currentGame, setWindDirection, setWindStrength, setScale } = useGameStore()
   const [windDir, setWindDir] = useState(currentGame?.windDirection ?? 0)
 
   const handleSubmit = () => {
@@ -23,9 +27,48 @@ export function GameSetup({ onComplete }: GameSetupProps) {
         <div>
           <h2 className="text-xl font-semibold">Game Setup</h2>
           <p className="text-sm text-gray-400 mt-1">
-            The table is treated as infinite — there are no edges to configure. Set the wind, then
-            describe the terrain and ships; the first thing you place becomes the origin all other
-            positions are measured from.
+            The table is treated as infinite — there are no edges to configure. Set the scale and
+            the wind, then describe the terrain and ships; the first thing you place becomes the
+            origin all other positions are measured from.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">Scale</label>
+          <div className="flex gap-2">
+            {SCALES.map((scale) => (
+              <button
+                key={scale}
+                onClick={() => setScale(scale)}
+                className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                  currentGame?.scale === scale
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-gray-800 text-gray-400 border border-gray-700'
+                }`}
+              >
+                {scale}
+              </button>
+            ))}
+          </div>
+          <p className="text-xs text-gray-500 mt-2">
+            Speeds and gun ranges come from the rulebook's charts at this scale. Worth settling
+            now: the table is measured in millimetres, so changing it later would leave every
+            position meaning something else.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-gray-300 mb-2">Wind Strength</label>
+          <Select<WindStrength>
+            value={currentGame?.windStrength ?? 'moderate_breeze'}
+            onChange={setWindStrength}
+            ariaLabel="Wind strength"
+            className="w-full"
+            options={WIND_STRENGTHS.map((w) => ({ value: w, label: WIND_STRENGTH_LABELS[w] }))}
+          />
+          <p className="text-xs text-gray-500 mt-2">
+            How hard it is blowing, which every ship's speeds are read against. It can be changed
+            from the battlefield as the weather turns.
           </p>
         </div>
 

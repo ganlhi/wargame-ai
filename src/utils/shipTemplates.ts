@@ -1,24 +1,23 @@
 import { v4 as uuid } from 'uuid'
 import type { ShipSettings, ShipTemplate } from '../types'
+import { REFERENCE_SCALE } from '../data/binder'
+import { resolveArcs } from '../game/shipStats'
 
-/** Just the settings of a ship, copied, with nothing of her game state along for the ride. */
+/**
+ * Just the settings of a ship, copied, with nothing of her game state along
+ * for the ride. Her guns' ranges are held at {@link REFERENCE_SCALE}, so a
+ * ship saved out of a 1/700 game and one saved out of a 1/1200 game are stored
+ * alike; either way they are re-read at the scale of whatever game she is
+ * imported into.
+ */
 export function shipSettingsOf(source: ShipSettings): ShipSettings {
   return {
-    maxTurnPoints: source.maxTurnPoints,
+    shipType: source.shipType,
     foreAndAftRigged: source.foreAndAftRigged,
-    speedProfile: {
-      ...source.speedProfile,
-      // In irons is never a sailing speed, whatever the source may hold.
-      in_irons: { max: 0 },
-    },
     speedMultiplier: source.speedMultiplier,
-    driftSpeed: source.driftSpeed,
     baseWidth: source.baseWidth,
     baseLength: source.baseLength,
-    firingArcs: source.firingArcs.map((arc) => ({
-      ...arc,
-      guns: arc.guns.map((g) => ({ ...g, ranges: { ...g.ranges } })),
-    })),
+    firingArcs: resolveArcs(source.firingArcs, REFERENCE_SCALE),
   }
 }
 

@@ -8,8 +8,10 @@ import { TerrainPanel } from './TerrainPanel'
 import { PlayerMovementPanel } from './PlayerMovementPanel'
 import { ChunkPreviewPanel } from './ChunkPreviewPanel'
 import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
-import { RANGE_BAND_LABELS, arcSideLabel } from '../types'
-import type { ArcSide } from '../types'
+import { RANGE_BAND_LABELS, WIND_STRENGTHS, arcSideLabel } from '../types'
+import type { ArcSide, WindStrength } from '../types'
+import { WIND_STRENGTH_LABELS } from '../data/binder'
+import { Select } from './Select'
 import { suggestMovement } from '../game/ai'
 import { planSailedDistance } from '../game/movement'
 import { originName } from '../utils/coordinates'
@@ -18,7 +20,7 @@ import { saveGame } from '../sync/syncActions'
 import { DriveStatusBadge } from './DriveStatusBadge'
 
 export function GameView() {
-  const { currentGame, hasUnsavedChanges, exitToMenu, setPhase, addUnit, updateUnit, startGame, revealOrders, resolveTurn } = useGameStore()
+  const { currentGame, hasUnsavedChanges, exitToMenu, setPhase, addUnit, updateUnit, setWindStrength, startGame, revealOrders, resolveTurn } = useGameStore()
   const [showExitDialog, setShowExitDialog] = useState(false)
   const [editingTerrainId, setEditingTerrainId] = useState<string | null>(null)
   const [editingUnitId, setEditingUnitId] = useState<string | null>(null)
@@ -174,9 +176,25 @@ export function GameView() {
         </button>
         <div className="flex-1">
           <h1 className="text-base font-semibold">{currentGame.name}</h1>
-          <p className="text-xs text-gray-500">
-            {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}Wind &rarr; {COMPASS_LABELS[windTowardPoint(currentGame.windDirection)]} · Origin: {originName(currentGame) ?? 'none yet'} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
-          </p>
+          <div className="text-xs text-gray-500 flex items-center gap-1 flex-wrap">
+            <span>
+              {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}Wind &rarr; {COMPASS_LABELS[windTowardPoint(currentGame.windDirection)]}
+            </span>
+            {/* The weather turns during a game — every ten turns, by the book —
+                and every ship's speeds are read against it, so it is changed
+                here rather than only at setup. */}
+            <Select<WindStrength>
+              value={currentGame.windStrength}
+              onChange={setWindStrength}
+              ariaLabel="Wind strength"
+              title="Wind strength — every ship's speeds are read against it"
+              size="sm"
+              options={WIND_STRENGTHS.map((w) => ({ value: w, label: WIND_STRENGTH_LABELS[w] }))}
+            />
+            <span>
+              · {currentGame.scale} · Origin: {originName(currentGame) ?? 'none yet'} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
+            </span>
+          </div>
         </div>
         <DriveStatusBadge />
         {hasUnsavedChanges && (

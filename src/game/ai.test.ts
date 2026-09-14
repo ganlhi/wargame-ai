@@ -36,9 +36,10 @@ function makeArc(id: string, side: ArcSide, extreme = 300, guns = 10): FiringArc
     guns: [
       {
         id: `${id}-g`,
-        name: 'Guns',
+        type: 'long_24',
         guns,
         ranges: {
+          point_blank: 20,
           close: Math.round(extreme * 0.216),
           medium: Math.round(extreme * 0.36),
           long: Math.round(extreme * 0.6),
@@ -60,7 +61,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     orientation: 8,
     status: 'active',
     aiStyle: 'aggressive',
-    maxTurnPoints: 6,
+    shipType: 'rate_4', maxTurnPoints: 6,
     foreAndAftRigged: false,
     speedProfile: SPEED_PROFILE,
     speedMultiplier: 1,

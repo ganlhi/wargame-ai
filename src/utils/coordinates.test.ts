@@ -14,7 +14,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     orientation: 0,
     status: 'active',
     aiStyle: 'cautious',
-    maxTurnPoints: 6,
+    shipType: 'rate_4', maxTurnPoints: 6,
     foreAndAftRigged: false,
     speedProfile: {
       in_irons: { max: 0 }, beating: { max: 60 }, reaching: { max: 80 },
@@ -54,6 +54,8 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
     createdAt: '', updatedAt: '', schemaVersion: 5,
     originId: null,
     windDirection: 0,
+    windStrength: 'moderate_breeze',
+    scale: '1/1200',
     terrain: [],
     units: [],
     currentTurn: 1,
