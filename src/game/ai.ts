@@ -1,5 +1,5 @@
 import type { Unit, MovementPlan, TableTerrain, Attitude, RangeBand } from '../types'
-import { arcSideToAngles, arcMaxRange, arcEffectiveGuns, RANGE_BANDS } from '../types'
+import { arcSideToAngles, arcMaxRange, arcBestBand, arcEffectiveGuns, rakeMultiplier, RANGE_BANDS } from '../types'
 import {
   enumerateMovementPlans, applyMovementPlan, orientationToVector, driftVector,
   projectTackCompletion, topSpeed,
@@ -7,7 +7,7 @@ import {
 import { bestShotDuringMove } from './combat'
 import type { Point } from '../utils/geometry'
 import {
-  distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle,
+  distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, targetAspect,
   baseCorners, polygonsIntersect, polygonDistance,
   terrainPolygon, pointInPolygon, pointPolygonEdgeDistance,
 } from '../utils/geometry'
@@ -63,9 +63,6 @@ const ENEMY_GUN_PENALTY: Record<string, number> = {
   cautious: 4,
   defensive: 6,
 }
-// Being raked is worse than being hit in the side, by the same factor the
-// AI's own raking shots are prized.
-const RAKED_PENALTY_MULT = 1.6
 
 // Way made is worth very little in itself. These are tie-breakers between
 // plans that are otherwise as good — enough that a ship sails rather than
@@ -84,7 +81,6 @@ const CLOSING_WEIGHT: Record<string, number> = {
 // the position it buys; these are per-gun, discounted per turn the tack takes.
 const TACK_BROADSIDE_CLOSE = 14
 const TACK_BROADSIDE_MEDIUM = 7
-const TACK_RAKING_BONUS = 20
 // Closing to short range is the point of the manoeuvre, which suits a ship
 // looking for a fight far more than one trying to stay out of one.
 const TACK_STYLE_MULT: Record<string, number> = {
@@ -145,7 +141,17 @@ function getEngageableWeapons(
   firer: Unit,
   firerHeading: number,
   target: Unit,
-): { totalWeapons: number; broadsideWeapons: number; isRaking: boolean } {
+): {
+  totalWeapons: number
+  broadsideWeapons: number
+  isRaking: boolean
+  /**
+   * What the aspect the target presents multiplies a shot by — 1 for her
+   * side, more for a bow rake, most for a stern rake, and most of all at
+   * short range. 1 when nothing bears. See `rakeMultiplier`.
+   */
+  rakeMult: number
+} {
   const dist = distance(firer.position, target.position)
   const angleToTarget = angleBetweenPoints(firer.position, target.position)
   const relAngle = relativeAngle(firerHeading, angleToTarget)
@@ -155,6 +161,8 @@ function getEngageableWeapons(
   let totalWeapons = 0
   let broadsideWeapons = 0
   let isRaking = false
+  let rakeMult = 1
+  const aspect = targetAspect(targetRelAngle)
 
   for (const arc of firer.firingArcs) {
     // Guns count for what they would actually land at this range rather than
@@ -169,32 +177,36 @@ function getEngageableWeapons(
     if (arc.side === 'port' || arc.side === 'starboard') {
       broadsideWeapons += weapons
     }
-    if (isRakingAngle(targetRelAngle)) {
+    if (aspect !== 'beam') {
       isRaking = true
+      rakeMult = Math.max(rakeMult, rakeMultiplier(aspect, arcBestBand(arc, dist)))
     }
   }
 
-  return { totalWeapons, broadsideWeapons, isRaking }
+  return { totalWeapons, broadsideWeapons, isRaking, rakeMult }
 }
 
+/**
+ * Everything the ship brings to bear on every enemy from this pose, each
+ * enemy's guns counted at the rake she offers — so a broadside laid across a
+ * stern is worth more than the same broadside into a side.
+ */
 function getTotalEnemyWeaponsInArc(unit: Unit, enemies: Unit[]): {
   totalWeapons: number
-  broadsideWeapons: number
-  anyRaking: boolean
+  /** Broadside guns bearing, each multiplied by the rake on its target. */
+  rakedBroadsideWeapons: number
 } {
   const h = headingDeg(unit.orientation)
   let totalWeapons = 0
-  let broadsideWeapons = 0
-  let anyRaking = false
+  let rakedBroadsideWeapons = 0
 
   for (const e of enemies) {
     const result = getEngageableWeapons(unit, h, e)
     totalWeapons += result.totalWeapons
-    broadsideWeapons += result.broadsideWeapons
-    if (result.isRaking) anyRaking = true
+    rakedBroadsideWeapons += result.broadsideWeapons * result.rakeMult
   }
 
-  return { totalWeapons, broadsideWeapons, anyRaking }
+  return { totalWeapons, rakedBroadsideWeapons }
 }
 
 function isEnemyBroadsideOnUnit(unit: Unit, enemy: Unit): boolean {
@@ -268,8 +280,7 @@ function scoreAttitude(unit: Unit): number {
 }
 
 function scoreFiring(unit: Unit, enemies: Unit[]): number {
-  const { broadsideWeapons, anyRaking } = getTotalEnemyWeaponsInArc(unit, enemies)
-  return broadsideWeapons * 2 + (anyRaking ? 15 : 0)
+  return getTotalEnemyWeaponsInArc(unit, enemies).rakedBroadsideWeapons * 2
 }
 
 function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
@@ -357,7 +368,9 @@ function scoreEnemyBroadsideDanger(unit: Unit, enemies: Unit[]): number {
   for (const e of enemies) {
     const onUs = getEngageableWeapons(e, headingDeg(e.orientation), unit)
     if (onUs.totalWeapons <= 0) continue
-    penalty -= onUs.totalWeapons * (ENEMY_GUN_PENALTY[unit.aiStyle] ?? 4) * (onUs.isRaking ? RAKED_PENALTY_MULT : 1)
+    // Being raked is worse than being hit in the side, through the stern
+    // worst of all — by the same factors the AI's own rakes are prized.
+    penalty -= onUs.totalWeapons * (ENEMY_GUN_PENALTY[unit.aiStyle] ?? 4) * onUs.rakeMult
   }
   return penalty
 }
@@ -375,12 +388,12 @@ function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
     switch (unit.aiStyle) {
       case 'aggressive': {
         if (basesInContact(unit, e)) bonus += 40
-        if (weapons.isRaking) bonus += weapons.totalWeapons * 0.6
+        if (weapons.isRaking) bonus += weapons.totalWeapons * 0.4 * weapons.rakeMult
         else if (weapons.broadsideWeapons > 0) bonus += weapons.broadsideWeapons * 0.4
         break
       }
       case 'cautious': {
-        if (weapons.isRaking && dist >= medium && dist <= long) bonus += weapons.totalWeapons * 2
+        if (weapons.isRaking && dist >= medium && dist <= long) bonus += weapons.totalWeapons * 1.5 * weapons.rakeMult
         else if (weapons.broadsideWeapons > 0 && dist >= medium && dist <= long) bonus += weapons.broadsideWeapons * 1.5
         if (weapons.totalWeapons > 0 && dist < close) bonus -= weapons.totalWeapons * 0.5
         if (weapons.totalWeapons === 0 && dist > long) bonus -= 15
@@ -437,14 +450,14 @@ export function scoreTack(
     }
     const projected: Unit = { ...enemy, position }
 
-    const { broadsideWeapons, isRaking } = getEngageableWeapons(finished, heading, projected)
+    const { broadsideWeapons, rakeMult } = getEngageableWeapons(finished, heading, projected)
     if (broadsideWeapons === 0) continue
 
     const dist = distance(outcome.position, position)
     if (dist > medium) continue
 
     const perGun = dist <= close ? TACK_BROADSIDE_CLOSE : TACK_BROADSIDE_MEDIUM
-    best = Math.max(best, broadsideWeapons * perGun + (isRaking ? TACK_RAKING_BONUS : 0))
+    best = Math.max(best, broadsideWeapons * perGun * rakeMult)
   }
 
   return best * (TACK_STYLE_MULT[unit.aiStyle] ?? 1) * LOOKAHEAD_DISCOUNT ** (outcome.turns - 1)

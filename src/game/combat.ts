@@ -1,6 +1,6 @@
-import type { Unit, ArcSide, MovementPlan, RangeBand } from '../types'
-import { arcSideToAngles, arcBestBand, arcEffectiveGuns } from '../types'
-import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle } from '../utils/geometry'
+import type { Unit, ArcSide, Aspect, MovementPlan, RangeBand } from '../types'
+import { arcSideToAngles, arcBestBand, arcEffectiveGuns, rakeMultiplier } from '../types'
+import { distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, targetAspect } from '../utils/geometry'
 import { applyMovementPlan } from './movement'
 
 /**
@@ -20,21 +20,16 @@ export interface ShotOpportunity {
   band: RangeBand
   /** Guns bearing, each weighted by its band's to-hit modifier. */
   effectiveGuns: number
+  /** Which face the target presents to the guns; anything but `beam` is a rake. */
+  aspect: Aspect
   /** Whether the target presents her bow or stern to the guns. */
   raking: boolean
 }
 
 /**
- * Raking multiplies what a shot is worth: the same guns firing down the length
- * of a hull do far more than into her side. It weights the choice between
- * opportunities, not the damage the players then roll.
- */
-const RAKING_WEIGHT = 1.6
-
-/**
  * The best shot `plan` offers `unit` against any of `enemies`: the heaviest
- * effective weight of metal at any step, raking counted for more, and the
- * earliest of equals. null when nothing bears in range at any step.
+ * effective weight of metal at any step, a rake counted for more (a stern
+ * rake most of all), and the earliest of equals. null when nothing bears in range at any step.
  *
  * The enemy is taken to stand where she was entered. By the time the AI is
  * asked, the player has already moved their ships for the turn, so what the
@@ -71,7 +66,7 @@ export function bestShotDuringMove(
         headingDeg(target.orientation),
         angleBetweenPoints(target.position, from),
       )
-      const raking = isRakingAngle(targetRelAngle)
+      const aspect = targetAspect(targetRelAngle)
 
       for (const arc of unit.firingArcs) {
         const band = arcBestBand(arc, dist)
@@ -80,9 +75,14 @@ export function bestShotDuringMove(
         if (!inArc(relAngle, a.minAngle, a.maxAngle)) continue
         const effectiveGuns = arcEffectiveGuns(arc, dist)
         if (effectiveGuns <= 0) continue
-        const weight = effectiveGuns * (raking ? RAKING_WEIGHT : 1)
+        // A rake is worth more than a broadside into the side, a stern rake
+        // more than a bow rake, and both count for most at short range.
+        const weight = effectiveGuns * rakeMultiplier(aspect, band)
         if (!best || weight > best.weight) {
-          best = { targetId: target.id, chunkIndex: ci, arcSide: arc.side, band, effectiveGuns, raking, weight }
+          best = {
+            targetId: target.id, chunkIndex: ci, arcSide: arc.side, band, effectiveGuns,
+            aspect, raking: aspect !== 'beam', weight,
+          }
         }
       }
     }

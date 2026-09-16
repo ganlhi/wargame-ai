@@ -148,6 +148,27 @@ export const RANGE_BAND_MODIFIERS: Record<RangeBand, number> = {
   extreme: 0.07,
 }
 
+/**
+ * Which face of a target the guns see: her stern, her bow, or her side. A
+ * shot down the length of a hull does far more than one into her side, and
+ * one through the stern — the weakest, most crowded end — more than one
+ * through the bow. That gap matters most where the shot itself is heavy, so
+ * at point blank and close range the rake is prized more than further out.
+ * These weight the AI's choice of position; the damage is the players' dice.
+ */
+export type Aspect = 'stern' | 'bow' | 'beam'
+
+export const RAKE_MULTIPLIERS: Record<'short' | 'long', Record<Aspect, number>> = {
+  short: { stern: 2.4, bow: 1.8, beam: 1 },
+  long: { stern: 1.7, bow: 1.4, beam: 1 },
+}
+
+/** What presenting `aspect` at `band` multiplies a shot's worth by. */
+export function rakeMultiplier(aspect: Aspect, band: RangeBand | null): number {
+  const reach = band === 'point_blank' || band === 'close' ? 'short' : 'long'
+  return RAKE_MULTIPLIERS[reach][aspect]
+}
+
 export const RANGE_BAND_LABELS: Record<RangeBand, string> = {
   point_blank: 'Point Blank',
   close: 'Close',

@@ -1,5 +1,5 @@
 import { arcSideToAngles } from '../types'
-import type { TableTerrain } from '../types'
+import type { Aspect, TableTerrain } from '../types'
 
 export interface Point {
   x: number
@@ -43,12 +43,20 @@ export function inArc(angle: number, minAngle: number, maxAngle: number): boolea
  * `arcSideToAngles` so the angles live in exactly one place.
  */
 export function isRakingAngle(targetRelAngle: number): boolean {
-  const bow = arcSideToAngles('bow')
+  return targetAspect(targetRelAngle) !== 'beam'
+}
+
+/**
+ * Which face a target presents to a firer at `targetRelAngle` (the bearing of
+ * the firer relative to the target's heading): her stern, her bow, or, from
+ * anywhere else, her side.
+ */
+export function targetAspect(targetRelAngle: number): Aspect {
   const stern = arcSideToAngles('stern')
-  return (
-    inArc(targetRelAngle, bow.minAngle, bow.maxAngle) ||
-    inArc(targetRelAngle, stern.minAngle, stern.maxAngle)
-  )
+  if (inArc(targetRelAngle, stern.minAngle, stern.maxAngle)) return 'stern'
+  const bow = arcSideToAngles('bow')
+  if (inArc(targetRelAngle, bow.minAngle, bow.maxAngle)) return 'bow'
+  return 'beam'
 }
 
 /**

@@ -123,6 +123,32 @@ describe('evaluatePosition', () => {
   })
 })
 
+describe('the aspect a position offers', () => {
+  // Wind on the beam so the ship can sail. An enemy lying across her course
+  // to the east: at (600, 500) heading north her side faces the guns; heading
+  // east her stern does; heading west her bow.
+  const ai = makeUnit({ aiStyle: 'cautious', position: { x: 500, y: 500 }, orientation: 8, firingArcs: [makeArc('p', 'port'), makeArc('s', 'starboard')] })
+  const enemyAt = (orientation: number) =>
+    makeUnit({ id: 'e1', side: 'player', position: { x: 500, y: 300 }, orientation, firingArcs: [] })
+
+  it('rates a stern rake above a bow rake, and a bow rake above a broadside into the side', () => {
+    const stern = evaluatePosition(ai, [enemyAt(0)], [])
+    const bow = evaluatePosition(ai, [enemyAt(16)], [])
+    const beam = evaluatePosition(ai, [enemyAt(8)], [])
+    expect(stern).toBeGreaterThan(bow)
+    expect(bow).toBeGreaterThan(beam)
+  })
+
+  it('prizes the rake most at short range', () => {
+    const gap = (dist: number) => {
+      const near = { ...ai, position: { x: 500, y: 300 + dist } }
+      return evaluatePosition(near, [enemyAt(0)], []) - evaluatePosition(near, [enemyAt(8)], [])
+    }
+    // 60mm is inside close range for these guns (65mm); 150mm is medium.
+    expect(gap(60)).toBeGreaterThan(gap(150))
+  })
+})
+
 describe('basesInContact', () => {
   // Two 30×80 bases heading east, 90mm apart centre to centre → 10mm gap.
   const a = makeUnit({ position: { x: 500, y: 500 }, orientation: 8 })

@@ -131,8 +131,19 @@ describe('bestShotDuringMove', () => {
   it('prefers a raking shot to a broadside of the same weight', () => {
     // Two targets at the same range: one beam-on, one showing her stern to the guns.
     const beamOn = makeUnit({ id: 'beam', side: 'player', position: { x: 200, y: 0 }, orientation: 0 })
-    const sternOn = makeUnit({ id: 'stern', side: 'player', position: { x: -200, y: 0 }, orientation: 8 })
+    // Lying west of the guns and heading west, she shows them her stern.
+    const sternOn = makeUnit({ id: 'stern', side: 'player', position: { x: -200, y: 0 }, orientation: 24 })
     const shot = bestShotDuringMove(firer, STATIONARY, [beamOn, sternOn], 0)
-    expect(shot).toMatchObject({ targetId: 'stern', raking: true })
+    expect(shot).toMatchObject({ targetId: 'stern', raking: true, aspect: 'stern' })
+  })
+
+  it('prefers a stern rake to a bow rake, and a bow rake to a broadside', () => {
+    // The ship lying east heads west, bow toward the guns; the one lying west
+    // heads west too, stern toward them.
+    const bowOn = makeUnit({ id: 'bow', side: 'player', position: { x: 200, y: 0 }, orientation: 24 })
+    const sternOn = makeUnit({ id: 'stern', side: 'player', position: { x: -200, y: 0 }, orientation: 24 })
+    const beamOn = makeUnit({ id: 'beam', side: 'player', position: { x: -200, y: 0 }, orientation: 0 })
+    expect(bestShotDuringMove(firer, STATIONARY, [bowOn, sternOn], 0)).toMatchObject({ targetId: 'stern', aspect: 'stern' })
+    expect(bestShotDuringMove(firer, STATIONARY, [bowOn, beamOn], 0)).toMatchObject({ targetId: 'bow', aspect: 'bow' })
   })
 })
