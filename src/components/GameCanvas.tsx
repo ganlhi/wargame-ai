@@ -3,15 +3,14 @@ import { Application, Graphics, Container } from 'pixi.js'
 import { useGameStore } from '../stores/gameStore'
 import { Select } from './Select'
 import { TERRAIN_COLORS, TERRAIN_TYPE_OPTIONS } from '../utils/terrainStyles'
-import type { GameState, TerrainType, UnitStatus } from '../types'
-import { arcMaxRange, arcSideToAngles } from '../types'
-import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
-import { applyMovementPlan, turnOrderFor, unitsAtChunk } from '../game/movement'
+import type { AIStyle, GameState, TerrainType, UnitStatus } from '../types'
+import { ATTITUDE_LABELS, COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
+import { applyMovementPlan, turnOrderFor } from '../game/movement'
 import type { Point } from '../utils/geometry'
 import { terrainPolygon } from '../utils/geometry'
 import { dashSegments } from '../utils/dashedPath'
 import {
-  formatOffset, originPoint, terrainReferencePoint, toOffset, unitReferencePoint,
+  formatBearing, fromBearing, originPoint, terrainReferencePoint, toBearing, unitReferencePoint,
 } from '../utils/coordinates'
 import type { Viewport } from '../utils/viewport'
 import { PADDING, computeViewport, panViewport, toScreen, toWorld, zoomViewport } from '../utils/viewport'
@@ -19,6 +18,12 @@ import { PADDING, computeViewport, panViewport, toScreen, toWorld, zoomViewport 
 const GRID_COLOR = 0xffffff
 const GRID_ALPHA = 0.06
 const ORIGIN_COLOR = 0x38bdf8
+
+const AI_STYLE_OPTIONS: { value: AIStyle; label: string }[] = [
+  { value: 'aggressive', label: 'Aggressive' },
+  { value: 'cautious', label: 'Cautious' },
+  { value: 'defensive', label: 'Defensive' },
+]
 
 const TERRAIN_FILL_ALPHA = 0.35
 const TERRAIN_BORDER_WIDTH = 2
@@ -41,7 +46,6 @@ const DRIFT_DASH_GAP = 5
 
 function getStatusColor(status: UnitStatus): number | null {
   switch (status) {
-    case 'grappled': return 0xf59e0b
     case 'immobilised': return 0xeab308
     case 'destroyed': return 0x6b7280
     case 'surrendered': return 0xffffff
@@ -55,11 +59,6 @@ interface GameCanvasProps {
   placementMode?: boolean
   onTableClick?: (worldX: number, worldY: number) => void
   showBases?: boolean
-  /**
-   * During the reveal, which step of the turn the ships are drawn at: 0 = as
-   * the turn opens, 1–5 = the end of that chunk. Ignored in every other phase.
-   */
-  previewChunk?: number
 }
 
 export function GameCanvas({
@@ -67,8 +66,7 @@ export function GameCanvas({
   onEditTerrain,
   placementMode = false,
   onTableClick,
-  showBases = false,
-  previewChunk = 5,
+  showBases = true,
 }: GameCanvasProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const appRef = useRef<Application | null>(null)
@@ -80,7 +78,13 @@ export function GameCanvas({
   const [selectedTerrainId, setSelectedTerrainId] = useState<string | null>(null)
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null)
   const [selectedUnitId, setSelectedUnitId] = useState<string | null>(null)
-  const [movingTerrainId, setMovingTerrainId] = useState<string | null>(null)
+  /**
+   * An entity being given a new place by tapping the water. Works like placing
+   * a new ship: the tap is read off as a bearing from the origin ship. The
+   * origin ship herself cannot be moved this way — she reads origin wherever
+   * she is, so there is nothing to read the tap against.
+   */
+  const [relocating, setRelocating] = useState<{ kind: 'unit' | 'terrain'; id: string } | null>(null)
   // null = follow the content automatically; set = the player has taken manual
   // control of the view by panning or zooming, until they hit Fit.
   const [view, setView] = useState<Viewport | null>(null)
@@ -92,27 +96,32 @@ export function GameCanvas({
 
   const currentGame = useGameStore((s) => s.currentGame)
   const updateTerrain = useGameStore((s) => s.updateTerrain)
+  const updateUnit = useGameStore((s) => s.updateUnit)
   const removeTerrain = useGameStore((s) => s.removeTerrain)
   const removeUnit = useGameStore((s) => s.removeUnit)
-  const setGrapple = useGameStore((s) => s.setGrapple)
   const setOrigin = useGameStore((s) => s.setOrigin)
 
-  const placementModeRef = useRef(placementMode)
+  // Either kind of pointer placement — a new ship, or an existing entity being
+  // given a new place — turns a tap on the water into a position rather than
+  // a selection.
+  const pointerPlacing = placementMode || relocating !== null
+  const pointerPlacingRef = useRef(pointerPlacing)
+  const relocatingRef = useRef(relocating)
   const sizeRef = useRef({ w: 0, h: 0 })
   const resizeObserverRef = useRef<ResizeObserver | null>(null)
-  const moveDragStart = useRef<{ world: Point; center: Point } | null>(null)
   // A drag only pans when it began on empty water — starting on a ship or a
-  // terrain piece is a selection (or a terrain move), not a pan.
+  // terrain piece is a selection, not a pan.
   const panAllowedRef = useRef(false)
   const didPanRef = useRef(false)
   const viewportForRef = useRef<(w: number, h: number) => Viewport>(() => ({ scale: 1, offsetX: 0, offsetY: 0 }))
-  const handleMoveDragRef = useRef<(sx: number, sy: number) => void>(() => {})
+  const relocateToRef = useRef<(world: Point) => void>(() => {})
   const renderGridRef = useRef<() => void>(() => {})
   const renderTerrainRef = useRef<() => void>(() => {})
   const renderUnitsRef = useRef<() => void>(() => {})
   const renderOverlayRef = useRef<() => void>(() => {})
 
-  useEffect(() => { placementModeRef.current = placementMode }, [placementMode])
+  useEffect(() => { pointerPlacingRef.current = pointerPlacing }, [pointerPlacing])
+  useEffect(() => { relocatingRef.current = relocating }, [relocating])
   const onTableClickRef = useRef(onTableClick)
   useEffect(() => { onTableClickRef.current = onTableClick }, [onTableClick])
 
@@ -158,7 +167,7 @@ export function GameCanvas({
   useEffect(() => { originRef.current = origin })
 
   useEffect(() => {
-    if (!placementMode) return
+    if (!pointerPlacing) return
     const el = containerRef.current
     if (!el) return
     const onMove = (e: PointerEvent) => {
@@ -169,12 +178,15 @@ export function GameCanvas({
       setPlacementCursorPos({
         screenX: e.clientX,
         screenY: e.clientY,
-        label: formatOffset(toOffset(pos, originRef.current)),
+        label: formatBearing(toBearing(pos, originRef.current)),
       })
     }
     el.addEventListener('pointermove', onMove)
-    return () => el.removeEventListener('pointermove', onMove)
-  }, [placementMode, screenToWorld])
+    return () => {
+      el.removeEventListener('pointermove', onMove)
+      setPlacementCursorPos(null)
+    }
+  }, [pointerPlacing, screenToWorld])
 
   /**
    * Pan and zoom. Both work by snapshotting the viewport when the gesture
@@ -215,7 +227,7 @@ export function GameCanvas({
           startMidX: (a.x + b.x) / 2,
           startMidY: (a.y + b.y) / 2,
         }
-      } else if (pointers.size === 1 && panAllowedRef.current && !moveDragStart.current) {
+      } else if (pointers.size === 1 && panAllowedRef.current) {
         const p = localPoint(e)
         gesture = { kind: 'pan', startView: currentViewport(), startX: p.x, startY: p.y }
       } else {
@@ -357,7 +369,7 @@ export function GameCanvas({
       const sv = terrainPolygon(t).map((v) => worldToScreen(v.x, v.y, w, h))
       const c = TERRAIN_COLORS[t.type]
       const isSelected = t.id === selectedTerrainId
-      const isMoving = t.id === movingTerrainId
+      const isMoving = relocating?.kind === 'terrain' && relocating.id === t.id
 
       const g = new Graphics()
       g.poly(sv.flatMap((v) => [v.x, v.y]))
@@ -368,33 +380,18 @@ export function GameCanvas({
         alpha: 0.9,
       })
       g.eventMode = 'static'
-      g.cursor = isMoving ? 'grab' : 'pointer'
+      g.cursor = 'pointer'
       g.on('pointerdown', (e) => {
-        if (placementModeRef.current) return
+        if (pointerPlacingRef.current) return
         e.stopPropagation()
         panAllowedRef.current = false
-
-        if (t.id === movingTerrainId) {
-          const world = screenToWorldRef.current(e.global.x, e.global.y, w, h)
-          moveDragStart.current = { world, center: { ...t.center } }
-          const onMove = (ev: PointerEvent) => handleMoveDragRef.current(ev.clientX, ev.clientY)
-          const onUp = () => {
-            moveDragStart.current = null
-            window.removeEventListener('pointermove', onMove)
-            window.removeEventListener('pointerup', onUp)
-          }
-          window.addEventListener('pointermove', onMove)
-          window.addEventListener('pointerup', onUp)
-          return
-        }
-
         setSelectedTerrainId(t.id)
         setMenuPos({ x: e.nativeEvent.clientX, y: e.nativeEvent.clientY })
         setSelectedUnitId(null)
       })
       tc.addChild(g)
     }
-  }, [currentGame, worldToScreen, selectedTerrainId, movingTerrainId])
+  }, [currentGame, worldToScreen, selectedTerrainId, relocating])
 
   const renderUnits = useCallback(() => {
     const uc = unitsContainerRef.current
@@ -405,32 +402,9 @@ export function GameCanvas({
 
     const { scale } = viewportFor(w, h)
 
-    // Once the orders are on the table the ships are drawn where they will
-    // stand at the previewed step of the turn, so the player can walk the
-    // models along chunk by chunk. Everywhere else they sit where they are.
-    const units =
-      currentGame.currentPhase === 'reveal'
-        ? unitsAtChunk(currentGame.units, currentGame.windDirection, previewChunk)
-        : currentGame.units
-
-    // Grapple link lines, drawn first so the ship icons sit on top. One line per
-    // pair (dedup via sorted id key) connecting the two grappled units.
-    const drawnLinks = new Set<string>()
-    for (const u of units) {
-      if (!u.grappledWith) continue
-      const partner = units.find((p) => p.id === u.grappledWith)
-      if (!partner) continue
-      const key = [u.id, partner.id].sort().join('|')
-      if (drawnLinks.has(key)) continue
-      drawnLinks.add(key)
-      const a = worldToScreen(u.position.x, u.position.y, w, h)
-      const b = worldToScreen(partner.position.x, partner.position.y, w, h)
-      const link = new Graphics()
-      link.moveTo(a.x, a.y)
-      link.lineTo(b.x, b.y)
-      link.stroke({ color: 0xf59e0b, width: 2, alpha: 0.75 })
-      uc.addChild(link)
-    }
+    // Ships are drawn where the player last entered them, orders or no
+    // orders: the app moves nothing itself.
+    const units = currentGame.units
 
     for (const u of units) {
       const pos = worldToScreen(u.position.x, u.position.y, w, h)
@@ -442,7 +416,7 @@ export function GameCanvas({
       const isPlayer = u.side === 'player'
       const isDisabled = u.status === 'destroyed' || u.status === 'surrendered'
       const hullColor = isPlayer ? 0x3b82f6 : 0xef4444
-      const isSelected = u.id === selectedUnitId
+      const isSelected = u.id === selectedUnitId || (relocating?.kind === 'unit' && relocating.id === u.id)
 
       // Base footprint (drawn first, so the ship icon sits on top). The
       // container is already rotated to the heading, with local +x = bow, so the
@@ -483,7 +457,7 @@ export function GameCanvas({
       g.cursor = 'pointer'
       const unitId = u.id
       g.on('pointerdown', (e) => {
-        if (placementModeRef.current) return
+        if (pointerPlacingRef.current) return
         e.stopPropagation()
         panAllowedRef.current = false
         setSelectedUnitId(unitId)
@@ -494,7 +468,7 @@ export function GameCanvas({
       container.addChild(g)
       uc.addChild(container)
     }
-  }, [currentGame, worldToScreen, viewportFor, selectedUnitId, showBases, previewChunk])
+  }, [currentGame, worldToScreen, viewportFor, selectedUnitId, showBases, relocating])
 
   const renderOverlay = useCallback(() => {
     const oc = overlayContainerRef.current
@@ -502,8 +476,6 @@ export function GameCanvas({
     oc.removeChildren()
     const { w, h } = sizeRef.current
     if (!w || !h) return
-
-    const { scale } = viewportFor(w, h)
 
     // Compass rose, anchored to the canvas rather than to a table rectangle.
     const compassR = 16
@@ -553,12 +525,12 @@ export function GameCanvas({
 
     oc.addChild(g)
 
-    const drawPlanPath = (u: typeof currentGame.units[number], plan: typeof u.hiddenAIOrder, color: number) => {
-      if (!plan) return
-      // The very walk that will resolve the move draws it, so the track shows
+    const drawPlanPath = (u: typeof currentGame.units[number], plan: NonNullable<typeof u.aiOrder>, color: number) => {
+      // The very walk that resolves the move draws it, so the track shows
       // the sideways jog of every corner pivot exactly where it will happen.
-      // The track follows the ship's reference point — the middle of her stern
-      // edge, the point a player measures her by — not the base centre.
+      // The track follows the middle of her stern edge — the point a model is
+      // walked along the table by — though her bearing is measured to the
+      // base centre.
       const { path } = applyMovementPlan(u, plan, currentGame.windDirection)
       const track: Point[] = path.map((p) => worldToScreen(p.x, p.y, w, h))
 
@@ -582,8 +554,8 @@ export function GameCanvas({
       pathG.stroke({ color, width: 2, alpha: 0.6 })
       oc.addChild(pathG)
 
-      // The end marker sits on the same reference point the track was drawn
-      // through, so it lands where the stern will be measured to.
+      // The end marker sits on the same point the track was drawn through, so
+      // it lands where the stern will be read off.
       const endPos = track[track.length - 1]
       const dot = new Graphics()
       dot.circle(endPos.x, endPos.y, 4)
@@ -591,91 +563,40 @@ export function GameCanvas({
       oc.addChild(dot)
     }
 
-    for (const u of currentGame.units) {
-      if (u.side === 'ai' && u.hiddenAIOrder && currentGame.currentPhase === 'reveal' && (u.status === 'active' || u.status === 'immobilised')) {
-        drawPlanPath(u, u.hiddenAIOrder, 0xfbbf24)
-      }
-      if (u.side === 'player' && u.playerOrder && u.status === 'active' && (currentGame.currentPhase === 'orders' || currentGame.currentPhase === 'reveal')) {
-        drawPlanPath(u, u.playerOrder, 0x3b82f6)
+    if (currentGame.phase === 'orders') {
+      for (const u of currentGame.units) {
+        const plan = turnOrderFor(u)
+        if (plan) drawPlanPath(u, plan, 0xfbbf24)
       }
     }
+  }, [currentGame, worldToScreen])
 
-    const selectedUnit = currentGame.units.find((u) => u.id === selectedUnitId)
-    if (selectedUnit && selectedUnit.firingArcs.length > 0 && selectedUnit.hiddenAIFirePlan) {
-      const plan = turnOrderFor(selectedUnit, currentGame.windDirection)
-      const firePlan = selectedUnit.hiddenAIFirePlan
-
-      if (plan && firePlan) {
-        // The shot is taken from the pose at the end of the firing chunk —
-        // the same pose the fire plan was computed against.
-        const { poses } = applyMovementPlan(selectedUnit, plan, currentGame.windDirection)
-        const firing = poses[Math.min(firePlan.chunkIndex + 1, poses.length - 1)]
-
-        const firingPos = worldToScreen(firing.x, firing.y, w, h)
-        const firingOrientDeg = firing.orientation * 360 / 32
-        const arc = selectedUnit.firingArcs.find((a) => a.side === firePlan.arcSide)
-        if (arc) {
-          const a = arcSideToAngles(arc.side)
-          const worldMin = ((firingOrientDeg + a.minAngle) % 360 + 360) % 360
-          const worldMax = ((firingOrientDeg + a.maxAngle) % 360 + 360) % 360
-          const radius = arcMaxRange(arc) * scale
-          const toScreenAngle = (deg: number) => (deg - 90) * Math.PI / 180
-          const steps = 16
-          const color = 0x22c55e
-
-          const wedge = new Graphics()
-          wedge.moveTo(firingPos.x, firingPos.y)
-          wedge.lineTo(firingPos.x + Math.cos(toScreenAngle(worldMin)) * radius, firingPos.y + Math.sin(toScreenAngle(worldMin)) * radius)
-          const sweepDeg = worldMin <= worldMax ? worldMax - worldMin : 360 + worldMax - worldMin
-          for (let i = 1; i <= steps; i++) {
-            const angle = (worldMin + sweepDeg * (i / steps)) % 360
-            wedge.lineTo(firingPos.x + Math.cos(toScreenAngle(angle)) * radius, firingPos.y + Math.sin(toScreenAngle(angle)) * radius)
-          }
-          wedge.closePath()
-          wedge.fill({ color, alpha: 0.15 })
-          wedge.stroke({ color, width: 1.5, alpha: 0.4 })
-          oc.addChild(wedge)
-
-          const border = new Graphics()
-          for (const deg of [worldMin, worldMax]) {
-            const t = toScreenAngle(deg)
-            border.moveTo(firingPos.x, firingPos.y)
-            border.lineTo(firingPos.x + Math.cos(t) * radius, firingPos.y + Math.sin(t) * radius)
-          }
-          border.stroke({ color, width: 1, alpha: 0.5 })
-          oc.addChild(border)
-
-          const arcG = new Graphics()
-          const aStart = toScreenAngle(worldMin)
-          arcG.arc(firingPos.x, firingPos.y, radius, aStart, aStart + (sweepDeg * Math.PI) / 180)
-          arcG.stroke({ color, width: 1.5, alpha: 0.3 })
-          oc.addChild(arcG)
-        }
+  /**
+   * Put the entity being relocated where the water was tapped. The tap is read
+   * as a bearing from the origin ship — the nearest of the 16 points and the
+   * nearest millimetre — and laid back out from there, so what lands is
+   * exactly what the form would show, not the raw tap.
+   */
+  const relocateTo = useCallback(
+    (world: Point) => {
+      if (!relocating) return
+      const anchor = originRef.current
+      const snapped = fromBearing(toBearing(world, anchor), anchor)
+      const position = { x: Math.round(snapped.x), y: Math.round(snapped.y) }
+      if (relocating.kind === 'unit') {
+        updateUnit(relocating.id, { position })
+      } else {
+        updateTerrain(relocating.id, { center: position })
       }
-    }
-  }, [currentGame, worldToScreen, viewportFor, selectedUnitId])
-
-  const handleMoveDrag = useCallback(
-    (clientX: number, clientY: number) => {
-      if (!moveDragStart.current || !movingTerrainId) return
-      const el = containerRef.current
-      if (!el) return
-      const rect = el.getBoundingClientRect()
-      const { w, h } = sizeRef.current
-      if (!w || !h) return
-      const pos = screenToWorldRef.current(clientX - rect.left, clientY - rect.top, w, h)
-      const { world, center } = moveDragStart.current
-      updateTerrain(movingTerrainId, {
-        center: {
-          x: Math.round(center.x + (pos.x - world.x)),
-          y: Math.round(center.y + (pos.y - world.y)),
-        },
-      })
+      setRelocating(null)
+      setSelectedUnitId(null)
+      setSelectedTerrainId(null)
+      setMenuPos(null)
     },
-    [movingTerrainId, updateTerrain],
+    [relocating, updateUnit, updateTerrain],
   )
 
-  useEffect(() => { handleMoveDragRef.current = handleMoveDrag }, [handleMoveDrag])
+  useEffect(() => { relocateToRef.current = relocateTo }, [relocateTo])
   useEffect(() => { renderGridRef.current = renderGrid }, [renderGrid])
   useEffect(() => { renderTerrainRef.current = renderTerrain }, [renderTerrain])
   useEffect(() => { renderUnitsRef.current = renderUnits }, [renderUnits])
@@ -734,21 +655,21 @@ export function GameCanvas({
       })
       hit.on('pointerup', (e) => {
         if (didPanRef.current) return
-        if (placementModeRef.current && onTableClickRef.current) {
+        if (pointerPlacingRef.current) {
           const { w: cw, h: ch } = sizeRef.current
-          if (cw && ch) {
-            // The table is infinite: any point the player can click is valid.
-            const pos = screenToWorldRef.current(e.global.x, e.global.y, cw, ch)
-            onTableClickRef.current(Math.round(pos.x), Math.round(pos.y))
+          if (!cw || !ch) return
+          // The table is infinite: any point the player can tap is valid.
+          const pos = screenToWorldRef.current(e.global.x, e.global.y, cw, ch)
+          if (relocatingRef.current) {
+            relocateToRef.current(pos)
+          } else {
+            onTableClickRef.current?.(Math.round(pos.x), Math.round(pos.y))
           }
           return
         }
-        if (!moveDragStart.current) {
-          setSelectedTerrainId(null)
-          setMenuPos(null)
-          setSelectedUnitId(null)
-          setMovingTerrainId(null)
-        }
+        setSelectedTerrainId(null)
+        setMenuPos(null)
+        setSelectedUnitId(null)
       })
       app.stage.addChildAt(hit, 0)
 
@@ -793,14 +714,24 @@ export function GameCanvas({
     const app = appRef.current
     if (!app || !initialized.current || app.stage.children.length === 0) return
     const hit = app.stage.getChildAt(0) as Graphics
-    hit.cursor = placementMode ? 'crosshair' : 'grab'
-  }, [placementMode])
+    hit.cursor = pointerPlacing ? 'crosshair' : 'grab'
+  }, [pointerPlacing])
 
   const selectedTerrain = selectedTerrainId
     ? currentGame?.terrain.find((t) => t.id === selectedTerrainId)
     : undefined
   const selectedUnit = selectedUnitId
     ? currentGame?.units.find((u) => u.id === selectedUnitId)
+    : undefined
+  const lastShipWithTerrain =
+    (currentGame?.units.length ?? 0) === 1 && (currentGame?.terrain.length ?? 0) > 0
+  const relocatingName = relocating
+    ? relocating.kind === 'unit'
+      ? currentGame?.units.find((u) => u.id === relocating.id)?.name
+      : (() => {
+          const t = currentGame?.terrain.find((t) => t.id === relocating.id)
+          return t ? `the ${TERRAIN_COLORS[t.type].label.toLowerCase()}` : undefined
+        })()
     : undefined
 
   return (
@@ -835,19 +766,20 @@ export function GameCanvas({
         </button>
       </div>
 
-      {movingTerrainId && (
-        <div className="absolute bottom-4 left-1/2 -translate-x-1/2 bg-gray-900/90 border border-gray-700 rounded-lg px-4 py-2.5 backdrop-blur-sm flex gap-2 items-center">
-          <span className="text-xs text-gray-400">Drag the terrain to reposition it</span>
-          <button
-            onClick={() => {
-              setMovingTerrainId(null)
-              setSelectedTerrainId(null)
-              setMenuPos(null)
-            }}
-            className="text-xs text-green-400 hover:text-green-300 border border-green-800 rounded px-2 py-1 transition-colors cursor-pointer"
-          >
-            Done
-          </button>
+      {relocating && (
+        <div className="absolute inset-x-0 top-0 flex items-center justify-center pointer-events-none">
+          <div className="bg-gray-900/90 border border-gray-700 rounded-b-lg px-4 py-2 flex items-center gap-3 pointer-events-auto backdrop-blur-sm">
+            <span className="text-xs text-gray-300">
+              Tap the water where {relocatingName ?? 'it'} now lies
+              {relocating.kind === 'unit' ? ' (centre of the base)' : ' (centre)'}
+            </span>
+            <button
+              onClick={() => setRelocating(null)}
+              className="text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1 transition-colors cursor-pointer"
+            >
+              Cancel
+            </button>
+          </div>
         </div>
       )}
 
@@ -865,9 +797,7 @@ export function GameCanvas({
               ? ` ⌀${selectedTerrain.shape.width}mm`
               : ` ${selectedTerrain.shape.width}×${selectedTerrain.shape.height}mm`}
             <br />
-            {currentGame?.originId === selectedTerrain.id
-              ? 'Origin'
-              : formatOffset(toOffset(terrainReferencePoint(selectedTerrain), origin))}
+            {formatBearing(toBearing(terrainReferencePoint(selectedTerrain), origin))}
           </div>
           <div className="space-y-1.5">
             <label className="block text-xs text-gray-300">Type</label>
@@ -883,7 +813,7 @@ export function GameCanvas({
           <div className="flex gap-2 mt-3">
             <button
               onClick={() => {
-                setMovingTerrainId(selectedTerrain.id)
+                setRelocating({ kind: 'terrain', id: selectedTerrain.id })
                 setMenuPos(null)
               }}
               className="flex-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
@@ -902,14 +832,6 @@ export function GameCanvas({
               Edit
             </button>
           </div>
-          {currentGame?.originId !== selectedTerrain.id && (
-            <button
-              onClick={() => setOrigin(selectedTerrain.id)}
-              className="mt-2 w-full text-xs text-sky-400 hover:text-sky-300 border border-sky-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
-            >
-              Set as origin
-            </button>
-          )}
           <button
             onClick={() => {
               removeTerrain(selectedTerrain.id)
@@ -937,61 +859,84 @@ export function GameCanvas({
           </div>
           <div className="text-xs text-gray-500 mb-1">
             {currentGame?.originId === selectedUnit.id
-              ? 'Stern at the origin (0, 0)'
-              : `Stern: ${formatOffset(toOffset(unitReferencePoint(selectedUnit), origin))}`}
+              ? 'Origin — every bearing is measured from her'
+              : formatBearing(toBearing(unitReferencePoint(selectedUnit), origin))}
           </div>
           <div className="text-xs text-gray-500 mb-3">
-            Orientation: {COMPASS_LABELS[selectedUnit.orientation]} &middot; Attitude: {currentGame ? ATTITUDE_LABELS[computeAttitude(currentGame.windDirection, selectedUnit.orientation, selectedUnit.foreAndAftRigged)] : ''}
+            Heading {COMPASS_LABELS[selectedUnit.orientation]} &middot; {ATTITUDE_LABELS[selectedUnit.attitude]}
           </div>
 
-          {(() => {
-            const partner = selectedUnit.grappledWith
-              ? currentGame?.units.find((u) => u.id === selectedUnit.grappledWith)
-              : null
-            const candidates = (currentGame?.units ?? []).filter(
-              (u) => u.id !== selectedUnit.id && u.status !== 'destroyed' && u.status !== 'surrendered',
-            )
-            return (
-              <div className="mb-3 border-t border-gray-800 pt-2">
-                {partner ? (
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs text-amber-400">
-                      ⚓ Grappled with <span className="font-medium">{partner.name}</span>
-                    </span>
-                    <button
-                      onClick={() => setGrapple(selectedUnit.id, null)}
-                      className="text-xs text-amber-400 hover:text-amber-300 border border-amber-800 rounded px-2 py-1 transition-colors cursor-pointer whitespace-nowrap"
-                    >
-                      Release
-                    </button>
-                  </div>
-                ) : candidates.length > 0 ? (
-                  <label className="block">
-                    <span className="text-xs text-gray-400">Grapple with</span>
-                    <Select
-                      value=""
-                      onChange={(id) => id && setGrapple(selectedUnit.id, id)}
-                      placeholder="Select a ship…"
-                      size="sm"
-                      className="mt-1 w-full"
-                      ariaLabel="Grapple with"
-                      options={candidates.map((u) => ({ value: u.id, label: u.name }))}
-                    />
-                  </label>
-                ) : (
-                  <span className="text-xs text-gray-600">No other ships to grapple</span>
-                )}
+          {/* A quick way to bring a heading up to date without the form: one
+              point either way, or the slider. Any change is a change to what
+              the AI planned against, so it discards revealed orders. */}
+          <div className="mb-3 border-t border-gray-800 pt-2">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-xs text-gray-400">Heading</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => updateUnit(selectedUnit.id, { orientation: (selectedUnit.orientation + 31) % 32 })}
+                  className="w-6 h-6 rounded border border-gray-700 text-gray-300 hover:text-white text-xs leading-none cursor-pointer"
+                  aria-label="One point to port"
+                  title="One point to port"
+                >
+                  &larr;
+                </button>
+                <span className="font-mono text-xs text-gray-200 w-10 text-center">{COMPASS_LABELS[selectedUnit.orientation]}</span>
+                <button
+                  type="button"
+                  onClick={() => updateUnit(selectedUnit.id, { orientation: (selectedUnit.orientation + 1) % 32 })}
+                  className="w-6 h-6 rounded border border-gray-700 text-gray-300 hover:text-white text-xs leading-none cursor-pointer"
+                  aria-label="One point to starboard"
+                  title="One point to starboard"
+                >
+                  &rarr;
+                </button>
               </div>
-            )
-          })()}
+            </div>
+            <input
+              type="range"
+              min={0}
+              max={31}
+              value={selectedUnit.orientation}
+              onChange={(e) => updateUnit(selectedUnit.id, { orientation: Number(e.target.value) })}
+              className="w-full mt-1.5 cursor-pointer accent-blue-500"
+              aria-label="Heading"
+            />
+            {/* An AI ship's style is as much a per-turn setting as her heading:
+                a captain who has taken a beating turns cautious. Changing it
+                discards revealed orders, since the AI would move differently. */}
+            {selectedUnit.side === 'ai' && (
+              <div className="flex items-center justify-between gap-2 mt-2">
+                <span className="text-xs text-gray-400">Style</span>
+                <Select<AIStyle>
+                  value={selectedUnit.aiStyle}
+                  onChange={(aiStyle) => updateUnit(selectedUnit.id, { aiStyle })}
+                  size="sm"
+                  className="w-28"
+                  ariaLabel="AI style"
+                  options={AI_STYLE_OPTIONS}
+                />
+              </div>
+            )}
+          </div>
 
           {currentGame?.originId !== selectedUnit.id && (
-            <button
-              onClick={() => setOrigin(selectedUnit.id)}
-              className="mb-2 w-full text-xs text-sky-400 hover:text-sky-300 border border-sky-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
-            >
-              Set as origin
-            </button>
+            <div className="flex gap-2 mb-2">
+              <button
+                onClick={() => setRelocating({ kind: 'unit', id: selectedUnit.id })}
+                title="Tap the water where she now lies; the tap is read as a bearing from the origin ship"
+                className="flex-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+              >
+                Move
+              </button>
+              <button
+                onClick={() => setOrigin(selectedUnit.id)}
+                className="flex-1 text-xs text-sky-400 hover:text-sky-300 border border-sky-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+              >
+                Set as origin
+              </button>
+            </div>
           )}
 
           <div className="flex gap-2">
@@ -1006,10 +951,11 @@ export function GameCanvas({
             </button>
             <button
               onClick={() => {
-                removeUnit(selectedUnit.id)
-                setSelectedUnitId(null)
+                if (removeUnit(selectedUnit.id)) setSelectedUnitId(null)
               }}
-              className="flex-1 text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+              disabled={lastShipWithTerrain}
+              title={lastShipWithTerrain ? 'The terrain is measured from this ship; remove the terrain first' : 'Remove this ship from the game'}
+              className="flex-1 text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1.5 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Delete
             </button>
@@ -1017,7 +963,7 @@ export function GameCanvas({
         </div>
       )}
 
-      {placementMode && placementCursorPos && (
+      {pointerPlacing && placementCursorPos && (
         <div
           className="fixed z-40 pointer-events-none bg-gray-900/80 border border-gray-700 rounded px-2 py-1 text-xs font-mono text-gray-200"
           style={{ left: placementCursorPos.screenX + 14, top: placementCursorPos.screenY - 10 }}

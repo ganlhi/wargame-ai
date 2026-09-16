@@ -1,46 +1,31 @@
 import { useState, useCallback } from 'react'
 import { useGameStore } from '../stores/gameStore'
-import { GameSetup } from './GameSetup'
 import { GameCanvas } from './GameCanvas'
 import { UnitFormModal } from './UnitFormModal'
 import { TerrainFormModal } from './TerrainFormModal'
-import { TerrainPanel } from './TerrainPanel'
-import { PlayerMovementPanel } from './PlayerMovementPanel'
-import { ChunkPreviewPanel } from './ChunkPreviewPanel'
-import { COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
-import { RANGE_BAND_LABELS, WIND_STRENGTHS, arcSideLabel } from '../types'
-import type { ArcSide, WindStrength } from '../types'
-import { WIND_STRENGTH_LABELS } from '../data/binder'
-import { Select } from './Select'
-import { suggestMovement } from '../game/ai'
-import { planSailedDistance } from '../game/movement'
+import { TablePanel } from './TablePanel'
+import { AIOrdersPanel } from './AIOrdersPanel'
+import { WindControl } from './WindControl'
 import { originName } from '../utils/coordinates'
 import type { Unit } from '../types'
 import { saveGame } from '../sync/syncActions'
 import { DriveStatusBadge } from './DriveStatusBadge'
 
+/**
+ * The battlefield. There is no setup screen: a game is a table that gets
+ * re-described every turn, so everything is editable at all times, and the
+ * one button that changes with the phase either reveals the AI's orders for
+ * the table as described or, once they have been carried out, starts the
+ * next turn.
+ */
 export function GameView() {
-  const { currentGame, hasUnsavedChanges, exitToMenu, setPhase, addUnit, updateUnit, setWindStrength, startGame, revealOrders, resolveTurn } = useGameStore()
+  const { currentGame, hasUnsavedChanges, exitToMenu, addUnit, updateUnit, revealOrders, nextTurn } = useGameStore()
   const [showExitDialog, setShowExitDialog] = useState(false)
   const [editingTerrainId, setEditingTerrainId] = useState<string | null>(null)
   const [editingUnitId, setEditingUnitId] = useState<string | null>(null)
   const [placementActive, setPlacementActive] = useState(false)
   const [pendingPosition, setPendingPosition] = useState<{ x: number; y: number } | null>(null)
-  const [showActionLog, setShowActionLog] = useState(false)
-  const [showBases, setShowBases] = useState(false)
-  const [expandedAIUnit, setExpandedAIUnit] = useState<string | null>(null)
-  // Which step of the turn the reveal shows. Remembered against the turn it
-  // was set on, so every new reveal opens back at the end of the move.
-  const [chunkPreview, setChunkPreview] = useState<{ turn: number; chunk: number } | null>(null)
-  const hasContent = (currentGame?.terrain?.length ?? 0) > 0 || (currentGame?.units?.length ?? 0) > 0
-  /**
-   * Nothing on the table yet, so the next thing added becomes the origin and
-   * reads (0, 0) wherever it is put. There is no frame to measure a click
-   * against and the form pins it to the origin regardless, so asking for one
-   * would be asking a question whose answer is thrown away.
-   */
-  const placingOrigin = !currentGame?.originId
-  const [setupComplete, setSetupComplete] = useState(hasContent)
+  const [showBases, setShowBases] = useState(true)
 
   const handleBack = useCallback(() => {
     if (hasUnsavedChanges) {
@@ -53,17 +38,6 @@ export function GameView() {
   const handleSaveAndExit = () => {
     saveGame()
     exitToMenu()
-  }
-
-  const handleExitWithoutSaving = () => {
-    exitToMenu()
-  }
-
-  const handleSetupComplete = () => {
-    setSetupComplete(true)
-    if (currentGame) {
-      setPhase('setup')
-    }
   }
 
   const handleTableClick = (x: number, y: number) => {
@@ -80,91 +54,22 @@ export function GameView() {
       addUnit(unit)
     }
     setEditingUnitId(null)
-
-    if (unit.side === 'ai' && currentGame?.currentPhase === 'orders') {
-      const store = useGameStore.getState()
-      const game = store.currentGame
-      if (!game) return
-      const allUnits = game.units.map((u) =>
-        u.id === unit.id ? { ...u, ...unit } : u,
-      )
-      const updated = allUnits.find((u) => u.id === unit.id)!
-      const order = suggestMovement(
-        updated,
-        allUnits,
-        game.terrain,
-        game.windDirection,
-        existing?.prevAttitude ?? updated.prevAttitude,
-        1,
-      )
-      store.updateUnit(unit.id, { hiddenAIOrder: order })
-    }
+    setPendingPosition(null)
   }
 
   const editingUnit = editingUnitId ? currentGame?.units.find((u) => u.id === editingUnitId) : undefined
-  const showUnitForm = editingUnitId !== null
   const editingTerrain = editingTerrainId ? currentGame?.terrain.find((t) => t.id === editingTerrainId) : undefined
-  const showTerrainForm = editingTerrainId !== null
 
   if (!currentGame) return null
 
-  const previewChunk =
-    chunkPreview && chunkPreview.turn === currentGame.currentTurn ? chunkPreview.chunk : 5
-
-  const exitDialog = showExitDialog && (
-    <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
-      <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 mx-4 max-w-sm w-full">
-        <h3 className="text-lg font-semibold mb-2">Unsaved Changes</h3>
-        <p className="text-sm text-gray-400 mb-6">You have unsaved changes. What would you like to do?</p>
-        <div className="flex flex-col gap-2">
-          <button onClick={handleSaveAndExit} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer">
-            Save &amp; Exit
-          </button>
-          <button onClick={handleExitWithoutSaving} className="text-red-400 hover:text-red-300 px-4 py-2 rounded-lg text-sm border border-red-800 transition-colors cursor-pointer">
-            Exit Without Saving
-          </button>
-          <button onClick={() => setShowExitDialog(false)} className="text-gray-400 hover:text-gray-200 px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer">
-            Cancel
-          </button>
-        </div>
-      </div>
-    </div>
+  const hasAIShips = currentGame.units.some(
+    (u) => u.side === 'ai' && u.status !== 'destroyed' && u.status !== 'surrendered',
   )
-
-  if (!setupComplete) {
-    return (
-      <div className="min-h-svh flex flex-col bg-gray-950 text-gray-100">
-        <header className="border-b border-gray-800 px-4 py-3 flex items-center gap-4">
-          <button
-            onClick={handleBack}
-            className="text-gray-400 hover:text-gray-200 transition-colors cursor-pointer"
-            title="Back to menu"
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
-          </button>
-          <div className="flex-1">
-            <h1 className="text-base font-semibold">{currentGame.name}</h1>
-            <p className="text-xs text-gray-500">Setup</p>
-          </div>
-          <DriveStatusBadge />
-          {hasUnsavedChanges && (
-            <span className="text-xs text-yellow-500 bg-yellow-500/10 px-2 py-1 rounded">Unsaved</span>
-          )}
-          <button onClick={saveGame} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">
-            Save
-          </button>
-        </header>
-        <GameSetup onComplete={handleSetupComplete} />
-        {exitDialog}
-      </div>
-    )
-  }
+  const anchor = originName(currentGame)
 
   return (
     <div className="min-h-svh flex flex-col bg-gray-950 text-gray-100">
-      <header className="border-b border-gray-800 px-4 py-3 flex items-center gap-4">
+      <header className="border-b border-gray-800 px-4 py-3 flex items-center gap-3 flex-wrap">
         <button
           onClick={handleBack}
           className="text-gray-400 hover:text-gray-200 transition-colors cursor-pointer"
@@ -174,25 +79,13 @@ export function GameView() {
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
           </svg>
         </button>
-        <div className="flex-1">
-          <h1 className="text-base font-semibold">{currentGame.name}</h1>
-          <div className="text-xs text-gray-500 flex items-center gap-1 flex-wrap">
+        <div className="flex-1 min-w-0">
+          <h1 className="text-base font-semibold truncate">{currentGame.name}</h1>
+          <div className="text-xs text-gray-500 flex items-center gap-2 flex-wrap">
+            <WindControl />
             <span>
-              {currentGame.currentPhase !== 'setup' ? `Turn ${currentGame.currentTurn} · ` : ''}Wind &rarr; {COMPASS_LABELS[windTowardPoint(currentGame.windDirection)]}
-            </span>
-            {/* The weather turns during a game — every ten turns, by the book —
-                and every ship's speeds are read against it, so it is changed
-                here rather than only at setup. */}
-            <Select<WindStrength>
-              value={currentGame.windStrength}
-              onChange={setWindStrength}
-              ariaLabel="Wind strength"
-              title="Wind strength — every ship's speeds are read against it"
-              size="sm"
-              options={WIND_STRENGTHS.map((w) => ({ value: w, label: WIND_STRENGTH_LABELS[w] }))}
-            />
-            <span>
-              · {currentGame.scale} · Origin: {originName(currentGame) ?? 'none yet'} · <span className="capitalize">{currentGame.currentPhase === 'game_over' ? 'Game Over' : currentGame.currentPhase}</span>
+              {currentGame.scale} · Origin: {anchor ?? 'none yet'} ·{' '}
+              {currentGame.phase === 'orders' ? 'Orders revealed' : 'Describing the table'}
             </span>
           </div>
         </div>
@@ -200,46 +93,22 @@ export function GameView() {
         {hasUnsavedChanges && (
           <span className="text-xs text-yellow-500 bg-yellow-500/10 px-2 py-1 rounded">Unsaved</span>
         )}
-        {currentGame.currentPhase === 'setup' && editingTerrainId === null && editingUnitId === null && !placementActive && (
-          <button
-            onClick={() => setEditingTerrainId('new')}
-            className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
-            title="Add terrain"
-          >
-            + Terrain
-          </button>
-        )}
-        {currentGame.currentPhase === 'setup' && !placementActive && editingUnitId === null && (
-          <button
-            onClick={() => (placingOrigin ? setEditingUnitId('new') : setPlacementActive(true))}
-            className="text-gray-400 hover:text-gray-200 px-2 py-1 text-sm transition-colors cursor-pointer"
-            title="Add unit"
-          >
-            + Unit
-          </button>
-        )}
-        {currentGame.currentPhase === 'setup' && (
-          <button
-            onClick={startGame}
-            className="bg-green-600 hover:bg-green-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
-          >
-            Start Game
-          </button>
-        )}
-        {currentGame.currentPhase === 'orders' && (
+        {currentGame.phase === 'input' ? (
           <button
             onClick={revealOrders}
-            className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+            disabled={!hasAIShips}
+            title={hasAIShips ? 'Lay the AI’s orders for the table as described' : 'Add an AI ship first'}
+            className="bg-purple-600 hover:bg-purple-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
           >
-            Reveal AI Orders
+            Reveal orders
           </button>
-        )}
-        {currentGame.currentPhase === 'reveal' && (
+        ) : (
           <button
-            onClick={resolveTurn}
+            onClick={nextTurn}
+            title="The orders have been carried out on the table; clear them and describe the next turn"
             className="bg-orange-600 hover:bg-orange-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer"
           >
-            Resolve Turn
+            Next turn
           </button>
         )}
         <button
@@ -250,15 +119,6 @@ export function GameView() {
         >
           Bases
         </button>
-        {currentGame.currentPhase !== 'setup' && (
-          <button
-            onClick={() => setShowActionLog(!showActionLog)}
-            className={`px-2 py-1 text-sm rounded transition-colors cursor-pointer ${showActionLog ? 'bg-gray-700 text-white' : 'text-gray-400 hover:text-gray-200'}`}
-            title="Action Log"
-          >
-            Log
-          </button>
-        )}
         <button onClick={saveGame} className="bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-lg text-sm font-medium transition-colors cursor-pointer">
           Save
         </button>
@@ -271,20 +131,11 @@ export function GameView() {
           placementMode={placementActive}
           onTableClick={handleTableClick}
           showBases={showBases}
-          previewChunk={previewChunk}
         />
-        {currentGame.currentPhase === 'reveal' && (
-          <div className="absolute bottom-2 left-1/2 -translate-x-1/2 pointer-events-none">
-            <ChunkPreviewPanel
-              chunk={previewChunk}
-              onChange={(chunk) => setChunkPreview({ turn: currentGame.currentTurn, chunk })}
-            />
-          </div>
-        )}
         {placementActive && (
           <div className="absolute inset-x-0 top-0 flex items-center justify-center pointer-events-none">
             <div className="bg-gray-900/90 border border-gray-700 rounded-b-lg px-4 py-2 flex items-center gap-3 pointer-events-auto backdrop-blur-sm">
-              <span className="text-xs text-gray-300">Click on the battlefield to set the ship's stern position</span>
+              <span className="text-xs text-gray-300">Tap the water where the centre of the ship's base lies</span>
               <button
                 onClick={() => setPlacementActive(false)}
                 className="text-xs text-red-400 hover:text-red-300 border border-red-800 rounded px-2 py-1 transition-colors cursor-pointer"
@@ -294,154 +145,18 @@ export function GameView() {
             </div>
           </div>
         )}
-
-        {(currentGame.currentPhase === 'orders' || currentGame.currentPhase === 'reveal') && (
-          (currentGame.currentPhase === 'orders' ? currentGame.units.some(u => u.side === 'player' && u.status === 'active') : currentGame.units.some(u => u.status === 'active'))
-        ) && (
-          <div className="absolute right-2 top-2 bottom-2 w-64 flex flex-col gap-2 pointer-events-none overflow-y-auto">
-            {currentGame.currentPhase === 'orders' && currentGame.units.filter(u => u.side === 'player' && u.status === 'active').map(playerUnit => (
-              <PlayerMovementPanel key={playerUnit.id} unit={playerUnit} />
-            ))}
-            {currentGame.currentPhase === 'reveal' && (
-              <>
-                {currentGame.units.filter(u => u.side === 'player' && u.status === 'active' && u.playerOrder).map(playerUnit => (
-                  <PlayerMovementPanel key={playerUnit.id} unit={playerUnit} />
-                ))}
-                {currentGame.units.filter(u => u.side === 'ai' && u.status !== 'destroyed' && u.status !== 'surrendered').map(aiUnit => (
-                  <div
-                    key={aiUnit.id}
-                    className="bg-gray-900/90 border border-gray-700 rounded-lg p-3 pointer-events-auto backdrop-blur-sm cursor-pointer"
-                    onClick={() => setExpandedAIUnit(expandedAIUnit === aiUnit.id ? null : aiUnit.id)}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm font-medium text-white">{aiUnit.name}</span>
-                      <span className={`text-xs px-1.5 py-0.5 rounded ${aiUnit.aiStyle === 'aggressive' ? 'bg-red-900/50 text-red-300' : aiUnit.aiStyle === 'cautious' ? 'bg-yellow-900/50 text-yellow-300' : 'bg-blue-900/50 text-blue-300'}`}>
-                        {aiUnit.aiStyle}
-                      </span>
-                    </div>
-                    {aiUnit.hiddenAIAction && (() => {
-                      const target = currentGame.units.find(u => u.id === aiUnit.hiddenAIAction!.targetId)
-                      return (
-                        <p className="text-amber-400 font-medium text-xs mt-1">
-                          {aiUnit.hiddenAIAction.type === 'board' ? '⚔️ Boarding' : '🪝 Grappling'} {target?.name ?? 'unknown'}
-                        </p>
-                      )
-                    })()}
-                    {aiUnit.hiddenAIOrder && (() => {
-                      // The whole turn's move at a glance, before the chunk-by-
-                      // chunk detail: what the player will measure out in total.
-                      const order = aiUnit.hiddenAIOrder
-                      const drifting = !!order.isTack || aiUnit.isInIrons
-                      const sailed = planSailedDistance(order, aiUnit.isInIrons)
-                      return (
-                        <p className="text-xs text-gray-400 mt-1">
-                          {drifting ? (
-                            <>
-                              <span className="text-amber-400">Drifting</span> {aiUnit.driftSpeed}mm downwind, no way on
-                            </>
-                          ) : (
-                            <>
-                              Moves <span className="text-gray-200 font-medium">{sailed}mm</span>
-                            </>
-                          )}
-                          {order.totalTurnPoints > 0 && (
-                            <span className="text-gray-500">
-                              {' '}· turns {order.totalTurnPoints} pt{order.totalTurnPoints === 1 ? '' : 's'}
-                            </span>
-                          )}
-                        </p>
-                      )
-                    })()}
-                    {expandedAIUnit === aiUnit.id && (aiUnit.hiddenAIOrder || aiUnit.hiddenAIFirePlan) && (
-                      <div className="mt-2 text-xs text-gray-400 space-y-1">
-                        {aiUnit.hiddenAIOrder && (<>
-                        <p>Total turn pts: {aiUnit.hiddenAIOrder.totalTurnPoints}</p>
-                        <p>Effective max: {Math.round(aiUnit.hiddenAIOrder.effectiveMaxSpeed)}mm</p>
-                        <p className="text-gray-500">Chunks: {aiUnit.hiddenAIOrder.chunks.map((c, i) => (
-                          <span key={i}>
-                            {i > 0 && ' → '}
-                            {Math.round(c.distance)}mm{c.turn ? ` ${c.turn.direction === 'port' ? '←' : '→'}${c.turn.points}` : ''}
-                          </span>
-                        ))}
-                        {!aiUnit.hiddenAIOrder.isTack && !aiUnit.isInIrons && (
-                          <span className="text-gray-400"> = {planSailedDistance(aiUnit.hiddenAIOrder)}mm</span>
-                        )}</p>
-                        </>)}
-                        {aiUnit.hiddenAIFirePlan && (() => {
-                          const target = currentGame.units.find(u => u.id === aiUnit.hiddenAIFirePlan!.targetId)
-                          return (
-                            <p className="text-red-400 font-medium pt-1">
-                              ⚡ Fire {arcSideLabel(aiUnit.hiddenAIFirePlan.arcSide)} at {target?.name ?? 'unknown'} on chunk {aiUnit.hiddenAIFirePlan.chunkIndex + 1}
-                              {' '}({RANGE_BAND_LABELS[aiUnit.hiddenAIFirePlan.band].toLowerCase()} range)
-                            </p>
-                          )
-                        })()}
-                        {(() => {
-                          // Reloading is per arc, so name the arcs that are
-                          // still out and the chunk each comes back on.
-                          const reloading = (Object.entries(aiUnit.lastFireChunks) as [ArcSide, number][])
-                            .filter(([side]) => side !== aiUnit.hiddenAIFirePlan?.arcSide)
-                          if (reloading.length === 0) return null
-                          return (
-                            <p className="text-gray-600 pt-1">
-                              Reloading: {reloading
-                                .map(([side, chunk]) => `${arcSideLabel(side)} until chunk ${chunk + 1}`)
-                                .join(', ')}
-                            </p>
-                          )
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </>
-            )}
-          </div>
-        )}
-
-        {showActionLog && currentGame.currentPhase !== 'setup' && (
-          <div className="absolute right-2 top-2 bottom-2 w-72 bg-gray-900/95 border border-gray-700 rounded-lg pointer-events-auto backdrop-blur-sm flex flex-col overflow-hidden">
-            <div className="flex items-center justify-between px-3 py-2 border-b border-gray-700">
-              <span className="text-sm font-medium text-white">Action Log</span>
-              <button
-                onClick={() => setShowActionLog(false)}
-                className="text-gray-400 hover:text-gray-200 text-xs cursor-pointer"
-              >
-                Close
-              </button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              {currentGame.actionLog.length === 0 && (
-                <p className="text-xs text-gray-500 text-center py-4">No actions yet</p>
-              )}
-              {[...currentGame.actionLog].reverse().map((entry, i) => (
-                <div key={i} className="text-xs border-l-2 border-gray-700 pl-2 py-1">
-                  {entry.turn > 0 && <span className="text-gray-600">T{entry.turn} </span>}
-                  <span className="text-gray-400">{entry.text}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {currentGame.currentPhase === 'game_over' && (
-          <div className="absolute inset-0 flex items-center justify-center bg-black/40 pointer-events-none">
-            <div className="bg-gray-900 border border-gray-700 rounded-xl p-8 text-center pointer-events-auto">
-              <h2 className="text-2xl font-bold text-white mb-2">Game Over</h2>
-              <p className="text-gray-400">All units on one side have been defeated</p>
-            </div>
-          </div>
-        )}
+        <AIOrdersPanel />
       </main>
 
-      {currentGame.currentPhase === 'setup' && (
-        <TerrainPanel
-          onAddClick={() => setEditingTerrainId('new')}
-          onEditTerrain={(id) => setEditingTerrainId(id)}
-        />
-      )}
+      <TablePanel
+        onAddShip={() => setEditingUnitId('new')}
+        onPlaceShip={() => setPlacementActive(true)}
+        onAddTerrain={() => setEditingTerrainId('new')}
+        onEditUnit={(id) => setEditingUnitId(id)}
+        onEditTerrain={(id) => setEditingTerrainId(id)}
+      />
 
-      {showUnitForm && (
+      {editingUnitId !== null && (
         <UnitFormModal
           unit={editingUnit}
           defaultPosition={pendingPosition ?? undefined}
@@ -450,11 +165,29 @@ export function GameView() {
         />
       )}
 
-      {showTerrainForm && (
+      {editingTerrainId !== null && (
         <TerrainFormModal terrain={editingTerrain} onClose={() => setEditingTerrainId(null)} />
       )}
 
-      {exitDialog}
+      {showExitDialog && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
+          <div className="bg-gray-900 border border-gray-700 rounded-xl p-6 mx-4 max-w-sm w-full">
+            <h3 className="text-lg font-semibold mb-2">Unsaved Changes</h3>
+            <p className="text-sm text-gray-400 mb-6">You have unsaved changes. What would you like to do?</p>
+            <div className="flex flex-col gap-2">
+              <button onClick={handleSaveAndExit} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer">
+                Save &amp; Exit
+              </button>
+              <button onClick={exitToMenu} className="text-red-400 hover:text-red-300 px-4 py-2 rounded-lg text-sm border border-red-800 transition-colors cursor-pointer">
+                Exit Without Saving
+              </button>
+              <button onClick={() => setShowExitDialog(false)} className="text-gray-400 hover:text-gray-200 px-4 py-2 rounded-lg text-sm transition-colors cursor-pointer">
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

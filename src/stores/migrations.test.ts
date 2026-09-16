@@ -68,9 +68,50 @@ describe('migrateSavedGame — infinite table', () => {
     })
   })
 
-  it('falls back to the first terrain piece when a save has no units', () => {
+  it('leaves a save with terrain but no ships without an origin — only a ship can anchor the table', () => {
     const noUnits = migrateSavedGame({ ...legacySave, units: [] })
-    expect(noUnits.originId).toBe('t1')
+    expect(noUnits.originId).toBeNull()
+    expect(noUnits.terrain).toHaveLength(1)
+  })
+
+  it('re-anchors a save that was anchored on terrain onto its first ship', () => {
+    const onTerrain = migrateSavedGame({ ...legacySave, schemaVersion: 11, originId: 't1' })
+    expect(onTerrain.originId).toBe('u1')
+  })
+
+  it('drops the turn counter, the log and the old phase, opening at input', () => {
+    expect('currentTurn' in game).toBe(false)
+    expect('actionLog' in game).toBe(false)
+    expect('currentPhase' in game).toBe(false)
+    expect(game.phase).toBe('input')
+  })
+
+  it('reads every ship\'s attitude off her heading and the wind', () => {
+    // Wind from the east (8): heading north is reaching, heading south too.
+    expect(game.units[0].attitude).toBe('reaching')
+    expect(game.units[1].attitude).toBe('reaching')
+    const headToWind = migrateSavedGame({
+      ...legacySave,
+      units: [{ ...legacySave.units[0], orientation: 8 }],
+    })
+    expect(headToWind.units[0].attitude).toBe('in_irons')
+    expect(headToWind.units[0].isInIrons).toBe(true)
+    expect(headToWind.units[0].tackDirection).not.toBeNull()
+  })
+
+  it('has never given a migrated ship an order, so its memory of one is blank', () => {
+    expect(game.units[0].prevAttitude).toBeNull()
+    expect(game.units[0].prevMoveDistance).toBeNull()
+    expect(game.units[0].aiOrder).toBeNull()
+  })
+
+  it('reads a grappled ship as immobilised, the grapple itself being the table\'s business now', () => {
+    const grappled = migrateSavedGame({
+      ...legacySave,
+      units: [{ ...legacySave.units[0], status: 'grappled', grappledWith: 'u2' }, legacySave.units[1]],
+    })
+    expect(grappled.units[0].status).toBe('immobilised')
+    expect('grappledWith' in grappled.units[0]).toBe(false)
   })
 
   it('leaves an empty save without an origin', () => {
@@ -129,7 +170,15 @@ describe('migrateSavedGame — guns and speed', () => {
           running: { max: 90 },
         },
         firingArcs: [{ id: 'a1', side: 'starboard', maxRange: 300, weapons: 12 }],
+        hiddenAIOrder: {
+          chunks: [{ distance: 10 }, { distance: 10 }, { distance: 10 }, { distance: 10 }, { distance: 10 }],
+          totalTurnPoints: 0,
+          effectiveMaxSpeed: 50,
+        },
         hiddenAIFirePlan: { targetId: 'u2', chunkIndex: 1, arcSide: 'starboard' },
+        lastFireChunks: { starboard: 1 },
+        playerOrder: null,
+        currentPhase: 'reveal',
       },
     ],
   }
@@ -169,8 +218,31 @@ describe('migrateSavedGame — guns and speed', () => {
     expect(unit.maxTurnPoints).toBe(turnPoints(unit.shipType))
   })
 
-  it('drops a fire plan chosen against the old gun data', () => {
-    expect(unit.hiddenAIFirePlan).toBeNull()
+  it('drops orders, fire plans and reloading laid against the simulated table', () => {
+    const raw = unit as unknown as Record<string, unknown>
+    expect(raw.hiddenAIFirePlan).toBeUndefined()
+    expect(raw.hiddenAIOrder).toBeUndefined()
+    expect(raw.lastFireChunks).toBeUndefined()
+    expect(raw.playerOrder).toBeUndefined()
+    expect(unit.aiOrder).toBeNull()
+  })
+
+  it('keeps a revealed order on a save already on the current schema', () => {
+    const order = {
+      chunks: [{ distance: 10 }, { distance: 10 }, { distance: 10 }, { distance: 10 }, { distance: 10 }],
+      totalTurnPoints: 0,
+      effectiveMaxSpeed: 50,
+    }
+    const current = migrateSavedGame({
+      ...preGunProfiles,
+      schemaVersion: 12,
+      phase: 'orders',
+      units: [{ ...preGunProfiles.units[0], aiOrder: order, prevMoveDistance: 40, prevAttitude: 'beating' }],
+    })
+    expect(current.phase).toBe('orders')
+    expect(current.units[0].aiOrder).toEqual(order)
+    expect(current.units[0].prevMoveDistance).toBe(40)
+    expect(current.units[0].prevAttitude).toBe('beating')
   })
 
   it('keeps the gun count of an arc that already held profiles, re-reading its ranges', () => {
@@ -207,6 +279,5 @@ describe('migrateSavedGame — guns and speed', () => {
       guns: 6,
       ranges: gunRanges(type, '1/1200'),
     })
-    expect(current.units[0].hiddenAIFirePlan?.band).toBe('medium')
   })
 })

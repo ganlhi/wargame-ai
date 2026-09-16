@@ -1,19 +1,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import { v4 as uuid } from 'uuid'
-import type {
-  SavedGame, GameState, TableTerrain, Unit, GamePhase, ActionLogEntry, MovementPlan, Scale,
-  WindStrength,
-} from '../types'
-import { applyMovementPlan, turnOrderFor } from '../game/movement'
-import { suggestMovement, decideAggressiveAction } from '../game/ai'
-import { computeAIFirePlan } from '../game/combat'
-import { applyGrapple, clearGrappleForRemoved } from '../game/grapple'
-import { computeAttitude } from '../utils/attitude'
-import { formatWorldPoint, sternMidpoint } from '../utils/coordinates'
+import type { SavedGame, GameState, TableTerrain, Unit, Scale, WindStrength } from '../types'
+import { applyMovementPlan, tackTurnDirection } from '../game/movement'
+import { suggestMovement } from '../game/ai'
 import { migrateSavedGame, CURRENT_SCHEMA_VERSION } from './migrations'
 import { conditionsOf, resolveGame, resolveUnit } from '../game/shipStats'
-import { WIND_STRENGTH_LABELS } from '../data/binder'
 
 interface GameStore {
   savedGames: SavedGame[]
@@ -29,45 +21,28 @@ interface GameStore {
 
   setWindDirection: (direction: number) => void
   setWindStrength: (strength: WindStrength) => void
-  planAIOrders: () => void
+  /** Only while no ship is on the table: every distance is read against it. */
   setScale: (scale: Scale) => void
-  setPhase: (phase: GamePhase) => void
-  nextTurn: () => void
+  /** Re-anchor every bearing on another ship. Terrain cannot be the origin. */
   setOrigin: (id: string) => void
 
-  addTerrain: (terrain: Omit<TableTerrain, 'id'>) => void
+  /** Place a terrain piece. Refused (false) until a ship is on the table to measure it from. */
+  addTerrain: (terrain: Omit<TableTerrain, 'id'>) => boolean
   updateTerrain: (id: string, updates: Partial<TableTerrain>) => void
   removeTerrain: (id: string) => void
 
   addUnit: (unit: Unit) => void
   updateUnit: (id: string, updates: Partial<Unit>) => void
-  removeUnit: (id: string) => void
-  setGrapple: (id: string, otherId: string | null) => void
-  addLogEntry: (entry: ActionLogEntry) => void
-  startGame: () => void
+  /** Remove a ship. Refused (false) for the last ship while terrain still needs an origin. */
+  removeUnit: (id: string) => boolean
+
+  /** Lay and show the AI's orders for the table as it is now described. */
   revealOrders: () => void
-  resolveTurn: () => void
-  setPlayerOrder: (id: string, plan: MovementPlan | null) => void
+  /** Clear the revealed orders, the AI remembering what it needs of them, and start describing the next turn. */
+  nextTurn: () => void
 }
 
 const now = () => new Date().toISOString()
-
-/**
- * Pick the origin after an entity is deleted. A destroyed or surrendered ship
- * is still a model sitting on the table, so it stays a valid reference point —
- * only actually removing it from the game gives up the anchor, at which point
- * the next remaining entity takes over. World coordinates are untouched; only
- * the frame the readouts use shifts.
- */
-function reassignOrigin(
-  game: GameState,
-  removedId: string,
-  units: Unit[],
-  terrain: TableTerrain[],
-): string | null {
-  if (game.originId !== removedId) return game.originId
-  return units[0]?.id ?? terrain[0]?.id ?? null
-}
 
 function createInitialGame(name: string, scale: Scale): GameState {
   const id = uuid()
@@ -84,458 +59,263 @@ function createInitialGame(name: string, scale: Scale): GameState {
     scale,
     terrain: [],
     units: [],
-    currentTurn: 1,
-    currentPhase: 'setup',
-    actionLog: [],
+    phase: 'input',
   }
 }
 
+/**
+ * Revealed orders are a snapshot of the table as it was described. Once
+ * anything they were planned against changes — a position, a heading, the
+ * wind, a terrain piece, a ship's style or settings — they no longer hold, so
+ * they are dropped and the turn goes back to being described. Nothing is
+ * remembered from them: the AI only records an order it has seen carried out,
+ * which is what *Next turn* means.
+ */
+function withOrdersDiscarded(game: GameState): GameState {
+  if (game.phase !== 'orders') return game
+  return {
+    ...game,
+    phase: 'input',
+    units: game.units.map((u) => (u.aiOrder ? { ...u, aiOrder: null } : u)),
+  }
+}
+
+/**
+ * The tack a ship is in as her orders are laid, read against the heading the
+ * player has just entered. Head to wind she is in the procedure: swinging the
+ * way she was already swinging, or, if the app has no record of that, toward
+ * the bow the wind is on. Off the wind she is out of it, whatever the AI
+ * expected — the table is the truth.
+ */
+function withTackState(unit: Unit, windDirection: number): Unit {
+  const tackDirection = unit.isInIrons
+    ? unit.tackDirection ?? tackTurnDirection(unit.orientation, windDirection)
+    : null
+  return tackDirection === unit.tackDirection ? unit : { ...unit, tackDirection }
+}
+
+const canAct = (u: Unit) => u.status !== 'destroyed' && u.status !== 'surrendered'
+
 export const useGameStore = create<GameStore>()(
   persist(
-    (set, get) => ({
-      savedGames: [],
-      currentGame: null,
-      hasUnsavedChanges: false,
+    (set, get) => {
+      /** Commit a changed game, re-rating every ship against it. */
+      const commit = (game: GameState) =>
+        set({ currentGame: resolveGame({ ...game, updatedAt: now() }), hasUnsavedChanges: true })
 
-      createGame: (name, scale) => {
-        const game = createInitialGame(name, scale)
-        set((state) => ({
-          savedGames: [
-            ...state.savedGames,
-            { id: game.id, name, createdAt: game.createdAt, updatedAt: game.updatedAt, unitCount: 0 },
-          ],
-          currentGame: game,
-          hasUnsavedChanges: true,
-        }))
-        return game.id
-      },
+      return {
+        savedGames: [],
+        currentGame: null,
+        hasUnsavedChanges: false,
 
-      loadGame: (id) => {
-        const stored = localStorage.getItem(`game-${id}`)
-        if (stored) {
-          const game = migrateSavedGame(JSON.parse(stored))
-          set({ currentGame: game, hasUnsavedChanges: false })
-        }
-      },
+        createGame: (name, scale) => {
+          const game = createInitialGame(name, scale)
+          set((state) => ({
+            savedGames: [
+              ...state.savedGames,
+              { id: game.id, name, createdAt: game.createdAt, updatedAt: game.updatedAt, unitCount: 0 },
+            ],
+            currentGame: game,
+            hasUnsavedChanges: true,
+          }))
+          return game.id
+        },
 
-      deleteGame: (id) => {
-        localStorage.removeItem(`game-${id}`)
-        set((state) => ({
-          savedGames: state.savedGames.filter((g) => g.id !== id),
-          currentGame: state.currentGame?.id === id ? null : state.currentGame,
-        }))
-      },
-
-      saveCurrentGame: () => {
-        const { currentGame, savedGames } = get()
-        if (!currentGame) return
-        const timestamp = now()
-        const updated = { ...currentGame, updatedAt: timestamp }
-        localStorage.setItem(`game-${updated.id}`, JSON.stringify(updated))
-        set({
-          currentGame: updated,
-          hasUnsavedChanges: false,
-          savedGames: savedGames.map((g) =>
-            g.id === updated.id
-              ? { ...g, updatedAt: timestamp, unitCount: updated.units.length }
-              : g
-          ),
-        })
-      },
-
-      exitToMenu: () => {
-        const { currentGame, savedGames } = get()
-        if (currentGame) {
-          const stored = localStorage.getItem(`game-${currentGame.id}`)
-          if (!stored) {
-            set({
-              savedGames: savedGames.filter((g) => g.id !== currentGame.id),
-            })
+        loadGame: (id) => {
+          const stored = localStorage.getItem(`game-${id}`)
+          if (stored) {
+            const game = resolveGame(migrateSavedGame(JSON.parse(stored)))
+            set({ currentGame: game, hasUnsavedChanges: false })
           }
-        }
-        set({ currentGame: null, hasUnsavedChanges: false })
-      },
+        },
 
-      markChanged: () => {
-        set({ hasUnsavedChanges: true })
-      },
+        deleteGame: (id) => {
+          localStorage.removeItem(`game-${id}`)
+          set((state) => ({
+            savedGames: state.savedGames.filter((g) => g.id !== id),
+            currentGame: state.currentGame?.id === id ? null : state.currentGame,
+          }))
+        },
 
-      /**
-       * Re-anchor the coordinate system onto another entity. Nothing on the
-       * table moves — only the frame positions are reported in.
-       */
-      setOrigin: (id) => {
-        const game = get().currentGame
-        if (!game) return
-        const exists =
-          game.units.some((u) => u.id === id) || game.terrain.some((t) => t.id === id)
-        if (!exists) return
-        set({
-          currentGame: { ...game, originId: id, updatedAt: now() },
-          hasUnsavedChanges: true,
-        })
-      },
+        saveCurrentGame: () => {
+          const { currentGame, savedGames } = get()
+          if (!currentGame) return
+          const timestamp = now()
+          const updated = { ...currentGame, updatedAt: timestamp }
+          localStorage.setItem(`game-${updated.id}`, JSON.stringify(updated))
+          set({
+            currentGame: updated,
+            hasUnsavedChanges: false,
+            savedGames: savedGames.map((g) =>
+              g.id === updated.id
+                ? { ...g, updatedAt: timestamp, unitCount: updated.units.length }
+                : g,
+            ),
+          })
+        },
 
-      setWindDirection: (direction) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: { ...game, windDirection: direction, updatedAt: now() },
-          hasUnsavedChanges: true,
-        })
-      },
+        exitToMenu: () => {
+          const { currentGame, savedGames } = get()
+          if (currentGame) {
+            const stored = localStorage.getItem(`game-${currentGame.id}`)
+            if (!stored) {
+              set({
+                savedGames: savedGames.filter((g) => g.id !== currentGame.id),
+              })
+            }
+          }
+          set({ currentGame: null, hasUnsavedChanges: false })
+        },
 
-      /**
-       * Change the weather. Every ship's speeds are read from the charts
-       * against it, so the whole fleet is re-rated on the spot — and with it
-       * every plan already laid, which was measured out against speeds that no
-       * longer apply. A ship ordered 320mm in a moderate breeze cannot make a
-       * third of that in a slight air, so the orders go and are laid again: the
-       * AI's at once, the player's for them to enter afresh. A turn already
-       * revealed goes back to its orders phase, since what was revealed no
-       * longer holds.
-       */
-      setWindStrength: (strength) => {
-        const game = get().currentGame
-        if (!game || game.windStrength === strength) return
-        const underWay = game.currentPhase === 'orders' || game.currentPhase === 'reveal'
-        set({
-          currentGame: resolveGame({
-            ...game,
-            windStrength: strength,
-            units: game.units.map((u) => ({
-              ...u,
-              playerOrder: null,
-              hiddenAIOrder: null,
-              hiddenAIFirePlan: null,
-              hiddenAIAction: null,
-            })),
-            currentPhase: game.currentPhase === 'reveal' ? 'orders' : game.currentPhase,
-            actionLog: underWay
-              ? [
-                  ...game.actionLog,
-                  {
-                    turn: game.currentTurn,
-                    text: `Wind ${WIND_STRENGTH_LABELS[strength].toLowerCase()} — orders laid again`,
-                  },
-                ]
-              : game.actionLog,
-            updatedAt: now(),
-          }),
-          hasUnsavedChanges: true,
-        })
-        if (underWay) get().planAIOrders()
-      },
+        markChanged: () => {
+          set({ hasUnsavedChanges: true })
+        },
 
-      /**
-       * Change the scale. Only offered while the table is still empty — the
-       * charts' distances change with it, and positions already measured out
-       * in millimetres would no longer mean the same thing.
-       */
-      setScale: (scale) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: resolveGame({ ...game, scale, updatedAt: now() }),
-          hasUnsavedChanges: true,
-        })
-      },
+        setOrigin: (id) => {
+          const game = get().currentGame
+          if (!game || !game.units.some((u) => u.id === id)) return
+          // Nothing on the table moves — only the ship the bearings are read from.
+          commit({ ...game, originId: id })
+        },
 
-      /**
-       * Give every AI ship an order for the turn as it now stands. Called
-       * whenever what a ship could do has changed under her — a new turn, a
-       * game starting, the weather turning.
-       */
-      planAIOrders: () => {
-        const game = get().currentGame
-        if (!game) return
-        for (const u of game.units) {
-          if (u.side !== 'ai') continue
-          const order = suggestMovement(
-            u,
-            game.units,
-            game.terrain,
-            game.windDirection,
-            u.prevAttitude,
-            1,
-          )
-          get().updateUnit(u.id, { hiddenAIOrder: order })
-        }
-      },
+        setWindDirection: (direction) => {
+          const game = get().currentGame
+          if (!game || game.windDirection === direction) return
+          commit(withOrdersDiscarded({ ...game, windDirection: direction }))
+        },
 
-      setPhase: (phase) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: { ...game, currentPhase: phase, updatedAt: now() },
-          hasUnsavedChanges: true,
-        })
-      },
+        /**
+         * Change the weather. Every ship's speeds are read from the charts
+         * against it, so the whole fleet is re-rated on the spot — and any
+         * orders already revealed were measured against speeds that no longer
+         * apply, so they go too.
+         */
+        setWindStrength: (strength) => {
+          const game = get().currentGame
+          if (!game || game.windStrength === strength) return
+          commit(withOrdersDiscarded({ ...game, windStrength: strength }))
+        },
 
-      nextTurn: () => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: {
-            ...game,
-            currentTurn: game.currentTurn + 1,
-            currentPhase: 'orders',
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
+        setScale: (scale) => {
+          const game = get().currentGame
+          if (!game || game.scale === scale || game.units.length > 0) return
+          commit({ ...game, scale })
+        },
 
-      addTerrain: (spec) => {
-        const game = get().currentGame
-        if (!game) return
-        const terrain: TableTerrain = { ...spec, id: uuid() }
-        set({
-          currentGame: {
-            ...game,
-            terrain: [...game.terrain, terrain],
-            // First entity placed defines the origin for everything else.
-            originId: game.originId ?? terrain.id,
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
+        addTerrain: (spec) => {
+          const game = get().currentGame
+          // Terrain is placed by its bearing from the origin ship, so there
+          // has to be one before any terrain can be described.
+          if (!game || !game.originId) return false
+          const terrain: TableTerrain = { ...spec, id: uuid() }
+          commit(withOrdersDiscarded({ ...game, terrain: [...game.terrain, terrain] }))
+          return true
+        },
 
-      updateTerrain: (id, updates) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: {
+        updateTerrain: (id, updates) => {
+          const game = get().currentGame
+          if (!game) return
+          commit(withOrdersDiscarded({
             ...game,
             terrain: game.terrain.map((t) => (t.id === id ? { ...t, ...updates } : t)),
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
+          }))
+        },
 
-      removeTerrain: (id) => {
-        const game = get().currentGame
-        if (!game) return
-        const terrain = game.terrain.filter((t) => t.id !== id)
-        set({
-          currentGame: {
-            ...game,
-            terrain,
-            originId: reassignOrigin(game, id, game.units, terrain),
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
+        removeTerrain: (id) => {
+          const game = get().currentGame
+          if (!game) return
+          commit(withOrdersDiscarded({ ...game, terrain: game.terrain.filter((t) => t.id !== id) }))
+        },
 
-      addUnit: (unit) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: {
+        addUnit: (unit) => {
+          const game = get().currentGame
+          if (!game) return
+          commit(withOrdersDiscarded({
             ...game,
             units: [...game.units, resolveUnit(unit, conditionsOf(game))],
-            // First entity placed defines the origin for everything else.
+            // The first ship placed is the origin every bearing is read from.
             originId: game.originId ?? unit.id,
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
+          }))
+        },
 
-      updateUnit: (id, updates) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: {
+        /**
+         * Status is bookkeeping the player does while resolving the turn the
+         * revealed orders belong to, so it leaves the orders standing.
+         * Anything else changes what the AI planned against.
+         */
+        updateUnit: (id, updates) => {
+          const game = get().currentGame
+          if (!game) return
+          const bookkeeping = Object.keys(updates).every((k) => k === 'status')
+          const next: GameState = {
             ...game,
-            units: game.units.map((u) =>
-              u.id === id ? resolveUnit({ ...u, ...updates }, conditionsOf(game)) : u,
-            ),
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
+            units: game.units.map((u) => (u.id === id ? { ...u, ...updates } : u)),
+          }
+          commit(bookkeeping ? next : withOrdersDiscarded(next))
+        },
 
-      removeUnit: (id) => {
-        const game = get().currentGame
-        if (!game) return
-        const units = clearGrappleForRemoved(game.units, id)
-        set({
-          currentGame: {
+        removeUnit: (id) => {
+          const game = get().currentGame
+          if (!game || !game.units.some((u) => u.id === id)) return false
+          // The terrain is measured from a ship; with none left it would have
+          // nothing to be measured from.
+          if (game.units.length === 1 && game.terrain.length > 0) return false
+          const units = game.units.filter((u) => u.id !== id)
+          commit(withOrdersDiscarded({
             ...game,
             units,
-            originId: reassignOrigin(game, id, units, game.terrain),
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
+            // A destroyed or surrendered ship is still a model on the table and
+            // stays a valid origin; only removing her from the game hands the
+            // anchor to the next ship.
+            originId: game.originId === id ? units[0]?.id ?? null : game.originId,
+          }))
+          return true
+        },
 
-      setGrapple: (id, otherId) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: { ...game, units: applyGrapple(game.units, id, otherId), updatedAt: now() },
-          hasUnsavedChanges: true,
-        })
-      },
+        revealOrders: () => {
+          const game = get().currentGame
+          if (!game) return
+          const wind = game.windDirection
+          const units = game.units.map((u) => (u.side === 'ai' ? withTackState(u, wind) : u))
+          const ordered = units.map((u) => {
+            if (u.side !== 'ai') return u
+            if (!canAct(u)) return u.aiOrder ? { ...u, aiOrder: null } : u
+            const order = suggestMovement(u, units, game.terrain, wind, u.prevAttitude, 1)
+            return { ...u, aiOrder: order }
+          })
+          commit({ ...game, units: ordered, phase: 'orders' })
+        },
 
-      addLogEntry: (entry) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: {
-            ...game,
-            actionLog: [...game.actionLog, entry],
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
-
-      startGame: () => {
-        const game = get().currentGame
-        if (!game) return
-        const units = game.units.map((u) => {
-          const attitude = computeAttitude(game.windDirection, u.orientation, u.foreAndAftRigged)
-          return { ...u, attitude, prevAttitude: attitude }
-        })
-        set({
-          currentGame: {
-            ...game,
-            units,
-            currentTurn: 1,
-            currentPhase: 'orders',
-            actionLog: [{ turn: 0, text: 'Game started' }],
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-        get().planAIOrders()
-      },
-
-      revealOrders: () => {
-        const game = get().currentGame
-        if (!game) return
-
-        const units = game.units.map((u) => {
-          if (u.side !== 'ai' || u.status === 'destroyed' || u.status === 'surrendered') return u
-          const firePlan = computeAIFirePlan(u, game.units, game.windDirection)
-          const action = decideAggressiveAction(u, u.hiddenAIOrder, game.units, game.windDirection)
-          return {
-            ...u,
-            hiddenAIFirePlan: firePlan,
-            hiddenAIAction: action,
-            // Only the arc that fires this turn is left reloading. Everything
-            // else is loaded again: a full turn has passed since it last fired,
-            // which is exactly what the reload costs. Carrying the old value
-            // forward was what left a ship that fired late in one turn unable
-            // to fire at all afterwards.
-            lastFireChunks: firePlan ? { [firePlan.arcSide]: firePlan.chunkIndex } : {},
-          }
-        })
-
-        set({
-          currentGame: {
-            ...game,
-            units,
-            currentPhase: 'reveal',
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
-
-      setPlayerOrder: (id: string, plan: MovementPlan | null) => {
-        const game = get().currentGame
-        if (!game) return
-        set({
-          currentGame: {
-            ...game,
-            units: game.units.map((u) => (u.id === id ? { ...u, playerOrder: plan } : u)),
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-      },
-
-      resolveTurn: () => {
-        const game = get().currentGame
-        if (!game || game.currentPhase !== 'reveal') return
-
-        const units = [...game.units]
-        const moves: { unit: Unit; result: ReturnType<typeof applyMovementPlan> }[] = []
-
-        for (let i = 0; i < units.length; i++) {
-          const u = units[i]
-          // A ship mid-tack has no choice in the matter, so the continuation
-          // stands in for a missing order rather than leaving her frozen head
-          // to wind: the rules say she keeps swinging and keeps drifting. The
-          // same routine feeds the chunk-by-chunk preview, so what the player
-          // saw during the reveal is exactly what resolves here.
-          const plan = turnOrderFor(u, game.windDirection)
-          if (!plan) continue
-
-          const result = applyMovementPlan(u, plan, game.windDirection)
-          moves.push({ unit: u, result })
-          units[i] = {
-            ...u,
-            position: result.position,
-            orientation: result.orientation,
-            attitude: result.attitude,
-            prevAttitude: u.attitude,
-            prevMoveDistance: result.distanceTraveled,
-            isInIrons: result.isInIrons,
-            tackDirection: result.tackDirection,
-            hiddenAIOrder: null,
-            playerOrder: null,
-            hiddenAIFirePlan: null,
-          }
-        }
-
-        // Log positions in the frame the player reads on screen: an offset from
-        // the origin entity. Everything moves simultaneously, so the offsets are
-        // only meaningful once every ship has been resolved — including the
-        // origin ship itself, which may well have moved this turn.
-        const resolved = { ...game, units }
-        const logEntries: ActionLogEntry[] = moves.map(({ unit: u, result }) => {
-          const drift = result.isInIrons ? ` (drifted ${u.driftSpeed}mm)` : ''
-          const where = formatWorldPoint(
-            sternMidpoint(result.position, result.orientation, u.baseLength),
-            resolved,
-          )
-          return {
-            turn: game.currentTurn,
-            unitId: u.id,
-            unitName: u.name,
-            text: `${u.name} moved to ${where} heading ${result.orientation}pts${drift}`,
-          }
-        })
-
-        const nextTurn = game.currentTurn + 1
-        // The AI's grapple/board intent (hiddenAIAction) is only a suggestion,
-        // shown during reveal like the fire plan — it is NOT auto-applied. The
-        // player confirms an actual grapple via the unit panel. Clear the
-        // suggestion now that the turn is resolving.
-        set({
-          currentGame: {
-            ...game,
-            units: units.map((u) => ({ ...u, hiddenAIAction: null })),
-            actionLog: [...game.actionLog, ...logEntries],
-            currentTurn: nextTurn,
-            currentPhase: 'orders',
-            updatedAt: now(),
-          },
-          hasUnsavedChanges: true,
-        })
-
-        get().planAIOrders()
-      },
-    }),
+        /**
+         * The orders have been carried out on the table. Before they go, each
+         * AI ship records what the movement rules will ask about her previous
+         * turn: how far she sailed (half of it is next turn's minimum), what
+         * her attitude was as the orders were laid (a tack needs a whole turn
+         * spent beating) and the way she is swinging if a tack is under way.
+         * Nothing is recorded about where anyone is: that is for the player
+         * to enter afresh.
+         */
+        nextTurn: () => {
+          const game = get().currentGame
+          if (!game || game.phase !== 'orders') return
+          const units = game.units.map((u): Unit => {
+            if (u.side !== 'ai' || !canAct(u)) {
+              return u.aiOrder ? { ...u, aiOrder: null } : u
+            }
+            const result = u.aiOrder ? applyMovementPlan(u, u.aiOrder, game.windDirection) : null
+            return {
+              ...u,
+              prevAttitude: u.attitude,
+              // A ship that could not be given an order did not sail.
+              prevMoveDistance: result ? result.distanceTraveled : 0,
+              tackDirection: result ? result.tackDirection : u.tackDirection,
+              aiOrder: null,
+            }
+          })
+          commit({ ...game, units, phase: 'input' })
+        },
+      }
+    },
     {
       name: 'wargame-ai-store',
       partialize: (state) => ({

@@ -34,7 +34,7 @@ export const clampScale = (scale: number): number =>
 
 /**
  * Every world point the view needs to show: ship bases, terrain outlines, and
- * any movement path currently planned (so an order is never drawn off-screen).
+ * any revealed AI order's track (so an order is never drawn off-screen).
  *
  * The origin needs no entry of its own — it is a point on some unit or terrain
  * piece, so that entity's own outline already covers it.
@@ -53,7 +53,7 @@ export function contentPoints(game: GameState): Point[] {
       pts.push(u.position)
     }
 
-    const plan = turnOrderFor(u, game.windDirection)
+    const plan = turnOrderFor(u)
     if (!plan) continue
     // The same walk that resolves the move draws it, pivots and drift included.
     const { path, poses } = applyMovementPlan(u, plan, game.windDirection)

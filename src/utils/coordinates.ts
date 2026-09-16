@@ -4,31 +4,51 @@ import type { Point } from './geometry'
 /**
  * The table is infinite: there are no edges and no fixed frame of reference.
  * Positions are therefore stored in an arbitrary world frame (millimetres,
- * +x = East, +y = South) and always *reported* relative to the game's origin
- * entity — the first unit or terrain piece added to the game.
+ * +x = East, +y = South) and always *entered and shown* as a bearing from the
+ * game's origin ship — the first ship placed — the way a player reads a
+ * position across the table: so many millimetres in such a direction.
  *
- * Because the origin is an entity rather than a table corner, the origin's own
- * coordinates read (0, 0) forever, even once it has sailed halfway across the
- * room; everything else moves relative to it.
- *
- * Each entity has a placement reference point, which is the point these
- * relative coordinates measure to and from:
- *  - terrain: the centre of the shape;
- *  - units: the middle of the rear (stern) edge of the base, which is how a
- *    model is actually positioned against a ruler on the table.
+ * Each entity has a reference point the bearing is measured to:
+ *  - ships: the centre of the base (what `Unit.position` holds);
+ *  - terrain: the centre of its bounding box, which for the primitives the
+ *    app uses is the centre of the shape (`TableTerrain.center`).
  */
 
-/** A relative position, in mm along each compass axis. */
-export interface Offset {
-  /** Positive = East of the origin, negative = West. */
-  east: number
-  /** Positive = South of the origin, negative = North. */
-  south: number
+/**
+ * The 16 points of the compass rose, clockwise from north. Positions are read
+ * on this coarser rose rather than the 32-point one headings use: a bearing
+ * eyeballed across a table is not accurate to a degree, and NNW is what a
+ * player says.
+ */
+export const COMPASS_16 = [
+  'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
+  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW',
+] as const
+
+export const BEARING_POINTS = COMPASS_16.length
+
+/** A position relative to the origin ship: which way and how far. */
+export interface Bearing {
+  /** Index into {@link COMPASS_16}: 0 = N, 4 = E, 8 = S, 12 = W. */
+  direction: number
+  /** Distance in mm; 0 is the origin itself. */
+  distance: number
+}
+
+/** Angle of a rose point clockwise from north, in radians. */
+function directionAngle(direction: number): number {
+  return (direction * 2 * Math.PI) / BEARING_POINTS
+}
+
+/** The placement reference point of a unit, in world coordinates. */
+export function unitReferencePoint(u: Unit): Point {
+  return u.position
 }
 
 /**
- * Midpoint of a ship base's rear edge — the point a model is measured from.
- * `center` is the base centre, which is what `Unit.position` stores.
+ * Midpoint of a ship base's rear edge. Positions are measured to the base
+ * centre, but a model is walked along the table by its stern, so that is the
+ * point a planned track is drawn through.
  */
 export function sternMidpoint(center: Point, orientation: number, baseLength: number): Point {
   const angle = (orientation * Math.PI) / 16 - Math.PI / 2
@@ -38,75 +58,71 @@ export function sternMidpoint(center: Point, orientation: number, baseLength: nu
   }
 }
 
-/** Inverse of {@link sternMidpoint}: the base centre for a given stern midpoint. */
-export function centerFromSternMidpoint(stern: Point, orientation: number, baseLength: number): Point {
-  const angle = (orientation * Math.PI) / 16 - Math.PI / 2
-  return {
-    x: stern.x + Math.cos(angle) * (baseLength / 2),
-    y: stern.y + Math.sin(angle) * (baseLength / 2),
-  }
-}
-
-/** The placement reference point of a unit, in world coordinates. */
-export function unitReferencePoint(u: Unit): Point {
-  return sternMidpoint(u.position, u.orientation, u.baseLength)
-}
-
 /** The placement reference point of a terrain piece, in world coordinates. */
 export function terrainReferencePoint(t: TableTerrain): Point {
   return t.center
 }
 
 /**
- * World position of the game's origin. Falls back to (0, 0) for an empty game
- * or a dangling `originId`, which keeps world and relative coordinates
- * identical until the first entity is placed.
+ * World position of the game's origin ship. Falls back to (0, 0) for a game
+ * with no ships or a dangling `originId`, which keeps world and relative
+ * coordinates identical until the first ship is placed.
  */
-export function originPoint(game: Pick<GameState, 'originId' | 'units' | 'terrain'>): Point {
+export function originPoint(game: Pick<GameState, 'originId' | 'units'>): Point {
   if (!game.originId) return { x: 0, y: 0 }
   const unit = game.units.find((u) => u.id === game.originId)
-  if (unit) return unitReferencePoint(unit)
-  const terrain = game.terrain.find((t) => t.id === game.originId)
-  if (terrain) return terrainReferencePoint(terrain)
-  return { x: 0, y: 0 }
+  return unit ? unitReferencePoint(unit) : { x: 0, y: 0 }
 }
 
-/** Name of the origin entity, for labelling the coordinate readouts. */
-export function originName(game: Pick<GameState, 'originId' | 'units' | 'terrain'>): string | null {
+/** Name of the origin ship, for labelling the readouts. */
+export function originName(game: Pick<GameState, 'originId' | 'units'>): string | null {
   if (!game.originId) return null
-  const unit = game.units.find((u) => u.id === game.originId)
-  if (unit) return unit.name
-  const terrain = game.terrain.find((t) => t.id === game.originId)
-  if (terrain) return `${terrain.type} (terrain)`
-  return null
-}
-
-/** Convert a world point to an offset from `origin`. */
-export function toOffset(world: Point, origin: Point): Offset {
-  return { east: world.x - origin.x, south: world.y - origin.y }
-}
-
-/** Convert an offset from `origin` back to a world point. */
-export function fromOffset(offset: Offset, origin: Point): Point {
-  return { x: origin.x + offset.east, y: origin.y + offset.south }
+  return game.units.find((u) => u.id === game.originId)?.name ?? null
 }
 
 /**
- * Human-readable offset, e.g. `320mm E · 150mm S`. An axis that is within
- * `epsilon` of the origin is dropped, so the origin itself reads "origin".
+ * The bearing of a world point from `origin`: the nearest of the 16 points,
+ * and the distance to the nearest millimetre. A point on the origin has no
+ * direction to speak of and reads north at 0 mm.
  */
-export function formatOffset(offset: Offset, epsilon = 0.5): string {
-  const parts: string[] = []
-  if (Math.abs(offset.east) >= epsilon) {
-    parts.push(`${Math.round(Math.abs(offset.east))}mm ${offset.east > 0 ? 'E' : 'W'}`)
-  }
-  if (Math.abs(offset.south) >= epsilon) {
-    parts.push(`${Math.round(Math.abs(offset.south))}mm ${offset.south > 0 ? 'S' : 'N'}`)
-  }
-  return parts.length > 0 ? parts.join(' · ') : 'origin'
+export function toBearing(world: Point, origin: Point): Bearing {
+  const dx = world.x - origin.x
+  const dy = world.y - origin.y
+  const distance = Math.round(Math.hypot(dx, dy))
+  if (distance === 0) return { direction: 0, distance: 0 }
+  // Clockwise from north: north is -y, east is +x.
+  const angle = Math.atan2(dx, -dy)
+  const direction =
+    (Math.round((angle / (2 * Math.PI)) * BEARING_POINTS) + BEARING_POINTS) % BEARING_POINTS
+  return { direction, distance }
 }
 
-/** Convenience: format a world point as an offset from the game's origin. */
-export function formatWorldPoint(world: Point, game: Pick<GameState, 'originId' | 'units' | 'terrain'>): string {
-  return formatOffset(toOffset(world, originPoint(game)))
+/** The world point a bearing from `origin` names. */
+export function fromBearing(bearing: Bearing, origin: Point): Point {
+  const angle = directionAngle(bearing.direction)
+  return {
+    x: origin.x + Math.sin(angle) * bearing.distance,
+    y: origin.y - Math.cos(angle) * bearing.distance,
+  }
+}
+
+/** Human-readable bearing, e.g. `420 mm NNW`; the origin itself reads `origin`. */
+export function formatBearing(bearing: Bearing): string {
+  if (Math.round(bearing.distance) === 0) return 'origin'
+  return `${Math.round(bearing.distance)} mm ${COMPASS_16[bearing.direction]}`
+}
+
+/** Convenience: a world point as a bearing from the game's origin ship. */
+export function formatWorldPoint(world: Point, game: Pick<GameState, 'originId' | 'units'>): string {
+  return formatBearing(toBearing(world, originPoint(game)))
+}
+
+/**
+ * Where one point lies from another, as a bearing — `ends 182 mm NNE of her
+ * start`. Used for readings that must not depend on the origin ship, which may
+ * itself have moved.
+ */
+export function formatDisplacement(from: Point, to: Point): string {
+  const bearing = toBearing(to, from)
+  return bearing.distance === 0 ? 'where she started' : `${formatBearing(bearing)} of her start`
 }

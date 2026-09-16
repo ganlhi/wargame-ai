@@ -1,6 +1,6 @@
 export type AIStyle = 'aggressive' | 'cautious' | 'defensive'
 
-export type UnitStatus = 'active' | 'grappled' | 'immobilised' | 'destroyed' | 'surrendered'
+export type UnitStatus = 'active' | 'immobilised' | 'destroyed' | 'surrendered'
 
 export type Attitude = 'in_irons' | 'beating' | 'reaching' | 'quarter_reaching' | 'running'
 
@@ -52,7 +52,13 @@ export type TerrainType = 'island' | 'shoal' | 'reef'
 
 export type UnitSide = 'player' | 'ai'
 
-export type GamePhase = 'setup' | 'orders' | 'reveal' | 'resolve' | 'game_over'
+/**
+ * Where a turn stands. `input`: the player is describing the table — wind,
+ * headings, bearings, status. `orders`: the AI's plans for that table are
+ * revealed and drawn, and stay so until *Next turn* clears them or an edit to
+ * anything they were planned against discards them.
+ */
+export type GamePhase = 'input' | 'orders'
 
 export interface SavedGame {
   id: string
@@ -227,38 +233,17 @@ export interface SpeedRange {
   max: number
 }
 
-export interface ActionLogEntry {
-  turn: number
-  unitId?: string
-  unitName?: string
-  text: string
-}
-
-export interface FirePlan {
-  targetId: string
-  chunkIndex: number
-  arcSide: ArcSide
-  /** The closest band the shot falls in — how good a shot it is. */
-  band: RangeBand
-  /** Guns bearing, each weighted by its band's to-hit modifier. */
-  effectiveGuns: number
-}
-
-/**
- * A close-quarters intent an aggressive AI declares for the turn:
- * `grapple` = close to contact and grapple the target this turn;
- * `board` = already grappled, press a boarding action against the target.
- */
-export interface AIAction {
-  type: 'grapple' | 'board'
-  targetId: string
-}
-
 export interface Unit {
   id: string
   name: string
   side: UnitSide
+  /**
+   * The centre of the base, in world mm — the point her bearing from the
+   * origin ship is measured to. Only ever what the player last entered: the
+   * app never moves a ship itself.
+   */
   position: { x: number; y: number }
+  /** Heading, on the 32-point compass (0 = N, 8 = E). */
   orientation: number
   status: UnitStatus
   aiStyle: AIStyle
@@ -269,7 +254,7 @@ export interface Unit {
   shipType: ShipType
   /**
    * Points she may turn in a game turn. From the binder's movement chart for
-   * her `shipType`; see `resolveUnitStats`, which rewrites it on every write.
+   * her `shipType`; see `resolveUnit`, which rewrites it on every write.
    */
   maxTurnPoints: number
   /**
@@ -285,12 +270,12 @@ export interface Unit {
    *
    * Read from the binder's sailing charts for her `shipType` at the game's
    * scale and wind strength, not entered, and rewritten from there on every
-   * write — see `resolveUnitStats`.
+   * write — see `resolveUnit`.
    */
   speedProfile: Record<Attitude, SpeedRange>
   /**
    * Scales every figure in `speedProfile`, so one decimal makes a ship faster
-   * or slower overall without re-entering each point of sail. 1 = as entered,
+   * or slower overall without re-entering each point of sail. 1 = as charted,
    * below it shortened down, above it under full sail, 0 = dead in the water.
    */
   speedMultiplier: number
@@ -304,38 +289,44 @@ export interface Unit {
   // collision avoidance so ships never overlap. 0 disables the check.
   baseWidth: number
   baseLength: number
+  /**
+   * Her guns, arc by arc. Every ship carries a layout, the player's included:
+   * the AI judges how dangerous an enemy is, and how far to keep from her, by
+   * what she mounts.
+   */
   firingArcs: FiringArc[]
+  /**
+   * Her point of sail, from her heading and the wind. A cache like the charted
+   * figures: `resolveUnit` recomputes it on every write.
+   */
   attitude: Attitude
+  /** Head to wind: `attitude === 'in_irons'`. Cached alongside it. */
   isInIrons: boolean
-  // Id of the unit this one is grappled to (mutual). null when not grappled.
-  grappledWith: string | null
   /**
    * While a tack is under way, the direction the ship is swinging. The rules
    * require it to keep turning the same way until it is beating on the far
    * side, and the geometry alone is ambiguous — a ship head to wind could have
    * arrived there from either tack — so the direction has to be remembered
    * rather than re-derived. null when not tacking.
+   *
+   * Part of the AI's memory of its own last order (see `GameState`); for a
+   * player ship it is never set.
    */
   tackDirection: 'port' | 'starboard' | null
-  prevAttitude: Attitude
   /**
-   * Distance actually covered in the last movement phase, which sets this
-   * turn's minimum (half of it). `null` means the ship has not moved yet, so
-   * there is no last turn to halve — see `minMoveDistance`.
+   * Her attitude as her last orders were revealed. With her attitude now, it
+   * says whether the previous turn was spent entirely beating, which is what a
+   * tack requires. null until she has been given an order.
+   */
+  prevAttitude: Attitude | null
+  /**
+   * Distance the AI's last order sailed her, which sets this turn's minimum
+   * (half of it). `null` means she has not been given an order yet, so there is
+   * no last turn to halve — see `minMoveDistance`.
    */
   prevMoveDistance: number | null
-  hiddenAIOrder: MovementPlan | null
-  playerOrder: MovementPlan | null
-  /**
-   * For each broadside or chase arc, the chunk it last fired on — and so the
-   * chunk it becomes loaded again on, a full turn later. Reloading is tracked
-   * per arc, not per ship: a starboard broadside fired on chunk 2 leaves the
-   * port guns free to fire from chunk 0. An arc with no entry is loaded, and
-   * every arc that does not fire in a turn is loaded again by the next one.
-   */
-  lastFireChunks: Partial<Record<ArcSide, number>>
-  hiddenAIFirePlan: FirePlan | null
-  hiddenAIAction: AIAction | null
+  /** The revealed order for this turn, for an AI ship while `phase === 'orders'`. */
+  aiOrder: MovementPlan | null
 }
 
 /**
@@ -388,6 +379,13 @@ export interface MovementPlan {
   isTack?: boolean
 }
 
+/**
+ * A game is a description of the table, re-entered every turn, plus the AI's
+ * orders for it while they are revealed. There is no turn counter and no log:
+ * the app simulates nothing, and the only history it keeps is the little the
+ * AI needs about its own last order (see `Unit.prevAttitude`,
+ * `Unit.prevMoveDistance` and `Unit.tackDirection`).
+ */
 export interface GameState {
   id: string
   name: string
@@ -395,13 +393,13 @@ export interface GameState {
   updatedAt: string
   schemaVersion: number
   /**
-   * Id of the unit or terrain piece that anchors the coordinate system. The
-   * table is infinite, so there is no fixed frame to measure from: the first
-   * entity added to the game becomes the origin and every other position is
-   * reported relative to it. Its own coordinates stay (0, 0) even after it
-   * moves. null only while the game is empty.
+   * Id of the ship every bearing is measured from. The table is infinite, so
+   * there is no fixed frame: the first ship placed becomes the origin and reads
+   * *origin* wherever she is. Only a ship can be the origin, which is why no
+   * terrain can be placed before one. null only while the game has no ships.
    */
   originId: string | null
+  /** Where the wind blows *from*, on the 32-point compass. */
   windDirection: number
   /**
    * How hard it is blowing. With `scale`, this is what every ship's speeds are
@@ -416,7 +414,5 @@ export interface GameState {
   scale: Scale
   terrain: TableTerrain[]
   units: Unit[]
-  currentTurn: number
-  currentPhase: GamePhase
-  actionLog: ActionLogEntry[]
+  phase: GamePhase
 }

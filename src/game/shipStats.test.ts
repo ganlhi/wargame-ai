@@ -3,7 +3,8 @@ import type { GameState, Unit } from '../types'
 import { driftSpeed, gunRanges, speedProfile, turnPoints } from '../data/binder'
 import { conditionsOf, resolveArcs, resolveGame, resolveUnit, shipStats } from './shipStats'
 
-const CONDITIONS = { scale: '1/1200', windStrength: 'moderate_breeze' } as const
+// Wind from the north; the fixture heads east, so she is reaching.
+const CONDITIONS = { scale: '1/1200', windStrength: 'moderate_breeze', windDirection: 0 } as const
 
 function makeUnit(overrides: Partial<Unit> = {}): Unit {
   return {
@@ -11,7 +12,7 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     name: 'Test',
     side: 'ai',
     position: { x: 0, y: 0 },
-    orientation: 0,
+    orientation: 8,
     status: 'active',
     aiStyle: 'cautious',
     shipType: 'rate_3',
@@ -29,15 +30,10 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     ],
     attitude: 'reaching',
     isInIrons: false,
-    grappledWith: null,
     tackDirection: null,
     prevAttitude: 'reaching',
     prevMoveDistance: null,
-    hiddenAIOrder: null,
-    playerOrder: null,
-    lastFireChunks: {},
-    hiddenAIFirePlan: null,
-    hiddenAIAction: null,
+    aiOrder: null,
     ...overrides,
   }
 }
@@ -55,9 +51,7 @@ function makeGame(units: Unit[], overrides: Partial<GameState> = {}): GameState 
     scale: '1/1200',
     terrain: [],
     units,
-    currentTurn: 1,
-    currentPhase: 'orders',
-    actionLog: [],
+    phase: 'input',
     ...overrides,
   }
 }
@@ -81,13 +75,13 @@ describe('resolveUnit', () => {
   })
 
   it('re-rates her for the weather without touching her type', () => {
-    const gale = resolveUnit(makeUnit(), { scale: '1/1200', windStrength: 'gale' })
+    const gale = resolveUnit(makeUnit(), { ...CONDITIONS, windStrength: 'gale' })
     expect(gale.shipType).toBe('rate_3')
     expect(gale.speedProfile).toEqual(speedProfile('rate_3', 'gale', '1/1200'))
   })
 
   it('re-reads her guns at the scale, so an imported ship shoots at this game\'s distances', () => {
-    const larger = resolveUnit(makeUnit(), { scale: '1/700', windStrength: 'moderate_breeze' })
+    const larger = resolveUnit(makeUnit(), { ...CONDITIONS, scale: '1/700' })
     expect(larger.firingArcs[0].guns[0].ranges).toEqual(gunRanges('long_24', '1/700'))
     expect(larger.firingArcs[0].guns[0].guns, 'how many guns is hers, not the charts').toBe(14)
   })
@@ -102,6 +96,20 @@ describe('resolveUnit', () => {
   it('hands back the very same ship when nothing needs changing', () => {
     const unit = makeUnit()
     expect(resolveUnit(unit, CONDITIONS)).toBe(unit)
+  })
+
+  it('reads her attitude off her heading and the wind, head to wind included', () => {
+    // Heading east in a northerly: reaching. Swing the wind round to the east
+    // and she is in irons, which the cached flag follows.
+    const reaching = resolveUnit(makeUnit(), CONDITIONS)
+    expect(reaching.attitude).toBe('reaching')
+    expect(reaching.isInIrons).toBe(false)
+    const irons = resolveUnit(makeUnit(), { ...CONDITIONS, windDirection: 8 })
+    expect(irons.attitude).toBe('in_irons')
+    expect(irons.isInIrons).toBe(true)
+    // A fore-and-aft rig points a point higher.
+    const foreAft = resolveUnit(makeUnit({ orientation: 5, foreAndAftRigged: true }), CONDITIONS)
+    expect(foreAft.attitude).toBe('beating')
   })
 })
 

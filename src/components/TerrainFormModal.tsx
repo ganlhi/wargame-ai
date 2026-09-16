@@ -1,11 +1,11 @@
 import { useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
 import { TERRAIN_COLORS, TERRAIN_TYPES } from '../utils/terrainStyles'
-import { OffsetInput } from './OffsetInput'
+import { BearingInput } from './BearingInput'
 import { COMPASS_LABELS } from '../utils/attitude'
 import { TERRAIN_SHAPE_KINDS } from '../types'
 import type { TableTerrain, TerrainShapeKind, TerrainType } from '../types'
-import { fromOffset, originName, originPoint, toOffset } from '../utils/coordinates'
+import { fromBearing, originName, originPoint, toBearing } from '../utils/coordinates'
 
 const KIND_LABELS: Record<TerrainShapeKind, string> = {
   circle: 'Circle',
@@ -21,7 +21,9 @@ interface TerrainFormModalProps {
 /**
  * Terrain is entered as a simplified primitive placed by its centre, rather
  * than traced vertex by vertex: on an infinite table there is no photo to trace
- * over, so the player measures the piece and types it in.
+ * over, so the player measures the piece and reads its bearing off the origin
+ * ship. There has to be a ship to read it from, so the form has nothing to
+ * offer until one is on the table.
  */
 export function TerrainFormModal({ terrain, onClose }: TerrainFormModalProps) {
   const currentGame = useGameStore((s) => s.currentGame)
@@ -30,31 +32,29 @@ export function TerrainFormModal({ terrain, onClose }: TerrainFormModalProps) {
 
   const origin = currentGame ? originPoint(currentGame) : { x: 0, y: 0 }
   const anchorName = currentGame ? originName(currentGame) : null
-  // The very first entity placed *is* the origin, so it has nothing to be
-  // offset from.
-  const isFirstEntity = !currentGame?.originId
-  const isOrigin = !!terrain && currentGame?.originId === terrain.id
+  const hasOrigin = !!currentGame?.originId
 
   const [type, setType] = useState<TerrainType>(terrain?.type ?? 'island')
   const [kind, setKind] = useState<TerrainShapeKind>(terrain?.shape.kind ?? 'circle')
   const [width, setWidth] = useState(terrain?.shape.width ?? 200)
   const [height, setHeight] = useState(terrain?.shape.height ?? 120)
   const [rotation, setRotation] = useState(terrain?.shape.rotation ?? 0)
-  const [offset, setOffset] = useState(() =>
-    terrain ? toOffset(terrain.center, origin) : { east: 0, south: 0 },
+  const [bearing, setBearing] = useState(() =>
+    terrain ? toBearing(terrain.center, origin) : { direction: 0, distance: 0 },
   )
 
   if (!currentGame) return null
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
-    const center =
-      isFirstEntity || isOrigin ? (terrain?.center ?? { x: 0, y: 0 }) : fromOffset(offset, origin)
+    if (!hasOrigin) return
+    const world = fromBearing(bearing, origin)
+    const center = { x: Math.round(world.x), y: Math.round(world.y) }
     const shape = { kind, width, height, rotation }
     if (terrain) {
       updateTerrain(terrain.id, { type, center, shape })
-    } else {
-      addTerrain({ type, center, shape })
+    } else if (!addTerrain({ type, center, shape })) {
+      return
     }
     onClose()
   }
@@ -150,26 +150,25 @@ export function TerrainFormModal({ terrain, onClose }: TerrainFormModalProps) {
           )}
 
           <div className="border-t border-gray-800 pt-3">
-            {isFirstEntity || isOrigin ? (
-              <p className="text-xs text-gray-500">
-                {isOrigin
-                  ? 'This piece is the coordinate origin — everything else is measured from its centre.'
-                  : 'This is the first thing on the table, so it becomes the coordinate origin. Everything placed afterwards is measured from its centre.'}
-              </p>
-            ) : (
+            {hasOrigin ? (
               <>
                 <p className="text-xs text-gray-400 mb-2">
-                  Centre, measured from <span className="text-gray-200">{anchorName ?? 'the origin'}</span>
+                  Centre, from <span className="text-gray-200">{anchorName ?? 'the origin ship'}</span>
                 </p>
-                <OffsetInput value={offset} onChange={setOffset} />
+                <BearingInput value={bearing} onChange={setBearing} />
               </>
+            ) : (
+              <p className="text-xs text-amber-400">
+                Place a ship first. Terrain is measured from the origin ship, and there is none yet.
+              </p>
             )}
           </div>
 
           <div className="flex gap-2 pt-2">
             <button
               type="submit"
-              className="flex-1 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer"
+              disabled={!hasOrigin}
+              className="flex-1 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
               {terrain ? 'Save Changes' : 'Add Terrain'}
             </button>

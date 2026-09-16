@@ -1,10 +1,10 @@
-import type { Unit, MovementPlan, TableTerrain, Attitude, AIAction, RangeBand } from '../types'
+import type { Unit, MovementPlan, TableTerrain, Attitude, RangeBand } from '../types'
 import { arcSideToAngles, arcMaxRange, arcEffectiveGuns, RANGE_BANDS } from '../types'
 import {
   enumerateMovementPlans, applyMovementPlan, orientationToVector, driftVector,
   projectTackCompletion, topSpeed,
 } from './movement'
-import { computeAIFirePlan } from './combat'
+import { bestShotDuringMove } from './combat'
 import type { Point } from '../utils/geometry'
 import {
   distance, headingDeg, angleBetweenPoints, relativeAngle, inArc, isRakingAngle,
@@ -12,9 +12,11 @@ import {
   terrainPolygon, pointInPolygon, pointPolygonEdgeDistance,
 } from '../utils/geometry'
 
-// Centre-to-centre grapple range is unreachable once ship bases are accounted
-// for, so grapple proximity is measured as the gap between the two bases.
-export const GRAPPLE_RANGE = 20
+// How close two bases have to be for the ships to count as in contact — the
+// range at which the rulebook lets them grapple, which the player resolves
+// at the table. Centre-to-centre distance is unreachable once ship bases are
+// accounted for, so contact is measured as the gap between the two bases.
+export const CONTACT_RANGE = 20
 
 /** Shortest gap (mm) between two ships' bases; 0 when their bases overlap. */
 export function baseGap(a: Unit, b: Unit): number {
@@ -24,9 +26,9 @@ export function baseGap(a: Unit, b: Unit): number {
   )
 }
 
-/** Whether two ships are close enough (bases within GRAPPLE_RANGE) to grapple. */
-export function basesWithinGrapple(a: Unit, b: Unit): boolean {
-  return baseGap(a, b) <= GRAPPLE_RANGE
+/** Whether two ships are in contact: bases within CONTACT_RANGE of each other. */
+export function basesInContact(a: Unit, b: Unit): boolean {
+  return baseGap(a, b) <= CONTACT_RANGE
 }
 const TERRAIN_DANGER = 30
 const TERRAIN_PENALTY_MULT = 0.5
@@ -44,12 +46,38 @@ const LEASH_PENALTY_MULT = 0.5
 // Used when neither ship has any armament to derive a range from.
 const LEASH_FALLBACK_RANGE = 400
 
-// What a plan is worth for actually getting the guns off. `scoreFiring` only
-// looks at where the turn ends, but the shot is taken at whichever chunk of the
-// move first offers one — so a plan can score well on its final pose and still
-// fire nothing, which is how ships ended up turning a bearing broadside away
-// from a target at point-blank range.
+// What a plan is worth for the shot it offers along the way. `scoreFiring`
+// only looks at where the turn ends, but the rulebook lets a ship fire during
+// her move — so a plan can score well on its final pose and still offer
+// nothing, which is how ships ended up turning a bearing broadside away from
+// a target at point-blank range. The AI does not itself decide to fire; this
+// term only sees to it that the player has a shot to resolve.
 const FIRE_SOLUTION_PER_GUN = 4
+
+// What an enemy gun bearing on the ship costs, per effective gun, by how much
+// the style minds being shot at. The scale is the same as FIRE_SOLUTION_PER_GUN
+// so a broadside exchange is judged gun for gun: an aggressive ship accepts a
+// broadside to land one, a defensive ship will not.
+const ENEMY_GUN_PENALTY: Record<string, number> = {
+  aggressive: 2,
+  cautious: 4,
+  defensive: 6,
+}
+// Being raked is worse than being hit in the side, by the same factor the
+// AI's own raking shots are prized.
+const RAKED_PENALTY_MULT = 1.6
+
+// Way made is worth very little in itself. These are tie-breakers between
+// plans that are otherwise as good — enough that a ship sails rather than
+// dawdles, never enough to outweigh a shot, a threat or a range the style
+// cares about. (A full run is some 250mm; a close-range broadside of 14 guns
+// scores 56 through FIRE_SOLUTION_PER_GUN.)
+const MOVE_TIE_BREAKER = 0.02
+const CLOSING_WEIGHT: Record<string, number> = {
+  aggressive: 0.15,
+  cautious: 0.08,
+  defensive: 0.1,
+}
 
 // What coming about is worth, per broadside gun that would bear once the tack
 // is complete. A tack costs several turns in irons, so it has to be paid for by
@@ -74,8 +102,7 @@ type RangeTiers = Record<RangeBand, number>
 /**
  * The outer edge of each band across everything a ship carries — her longest
  * close range, her longest medium range, and so on. null when she has no guns
- * entered at all, which is the normal case for a player ship: only the AI needs
- * a gun layout, so the player's is left blank.
+ * entered at all.
  */
 function ownRangeTiers(unit: Unit): RangeTiers | null {
   const tiers: RangeTiers = { point_blank: 0, close: 0, medium: 0, long: 0, extreme: 0 }
@@ -106,8 +133,9 @@ const DEFAULT_RANGE_TIERS: RangeTiers = {
 /**
  * The bands the AI judges its distance from `enemy` by. Preferably the enemy's
  * own reach — how far away is far enough to be safe is a question about their
- * guns. Player ships carry no gun layout, so it falls back to the AI's own
- * bands, which are at least the right order of magnitude for the engagement.
+ * guns. Every ship carries a gun layout, but one entered without any falls
+ * back to the AI's own bands, which are at least the right order of magnitude
+ * for the engagement.
  */
 function getRangeTiers(enemy: Unit, self: Unit): RangeTiers {
   return ownRangeTiers(enemy) ?? ownRangeTiers(self) ?? DEFAULT_RANGE_TIERS
@@ -254,7 +282,7 @@ function scoreDistanceByStyle(unit: Unit, enemies: Unit[]): number {
 
     switch (unit.aiStyle) {
       case 'aggressive': {
-        if (basesWithinGrapple(unit, e)) score += 80
+        if (basesInContact(unit, e)) score += 80
         else if (dist < close) score += 50
         else if (dist < medium) score += 20
         else score -= Math.floor(dist / 100) * 5
@@ -317,18 +345,19 @@ function scoreTerrainProximity(pos: Point, terrain: TableTerrain[]): number {
   return penalty
 }
 
+/**
+ * What the enemy would land on the ship from here: every enemy gun that bears
+ * on her, counted at its band's modifier — the same measure her own shots are
+ * weighed by — and worse if it would rake her. How much that costs depends on
+ * the style: a defensive ship is here to avoid exactly this, an aggressive one
+ * takes it as the price of closing.
+ */
 function scoreEnemyBroadsideDanger(unit: Unit, enemies: Unit[]): number {
   let penalty = 0
   for (const e of enemies) {
-    if (isEnemyBroadsideOnUnit(unit, e)) {
-      const dist = distance(unit.position, e.position)
-      const { medium, long } = getRangeTiers(e, unit)
-      if (dist < medium) {
-        penalty -= 20
-      } else if (dist < long) {
-        penalty -= 10
-      }
-    }
+    const onUs = getEngageableWeapons(e, headingDeg(e.orientation), unit)
+    if (onUs.totalWeapons <= 0) continue
+    penalty -= onUs.totalWeapons * (ENEMY_GUN_PENALTY[unit.aiStyle] ?? 4) * (onUs.isRaking ? RAKED_PENALTY_MULT : 1)
   }
   return penalty
 }
@@ -345,7 +374,7 @@ function scoreStyleSpecific(unit: Unit, enemies: Unit[]): number {
 
     switch (unit.aiStyle) {
       case 'aggressive': {
-        if (basesWithinGrapple(unit, e)) bonus += 40
+        if (basesInContact(unit, e)) bonus += 40
         if (weapons.isRaking) bonus += weapons.totalWeapons * 0.6
         else if (weapons.broadsideWeapons > 0) bonus += weapons.broadsideWeapons * 0.4
         break
@@ -422,26 +451,20 @@ export function scoreTack(
 }
 
 /**
- * Whether this plan actually gets a shot off, and with what weight of metal.
+ * The heaviest shot this plan offers along the way, and what it is worth.
  *
- * The fire plan is worked out from the movement order once it has been chosen,
- * so unless the choice accounts for it the ship can manoeuvre itself out of its
- * own firing solution. Running the same resolution the reveal step will run is
- * the only way to score a plan on what it really achieves.
+ * Judged by the same walk the reveal will draw, from the base's pose at the
+ * end of every step, so a plan is scored on the shot it really gives rather
+ * than on the arc that happens to bear once the move is over.
  */
 function scoreFiringOpportunity(
   unit: Unit,
   plan: MovementPlan,
-  allUnits: Unit[],
+  enemies: Unit[],
   windDirection: number,
 ): number {
-  // computeAIFirePlan resolves an AI ship's guns against the player's.
-  if (unit.side !== 'ai') return 0
-
-  const firePlan = computeAIFirePlan({ ...unit, hiddenAIOrder: plan }, allUnits, windDirection)
-  if (!firePlan) return 0
-
-  return firePlan.effectiveGuns * FIRE_SOLUTION_PER_GUN
+  const shot = bestShotDuringMove(unit, plan, enemies, windDirection)
+  return shot ? shot.effectiveGuns * FIRE_SOLUTION_PER_GUN : 0
 }
 
 export function evaluatePosition(
@@ -526,11 +549,7 @@ export function suggestMovement(
   prevAttitude: Attitude | null,
   difficulty = 1,
 ): MovementPlan | null {
-  if (
-    unit.status === 'destroyed' ||
-    unit.status === 'surrendered' ||
-    unit.status === 'grappled'
-  ) {
+  if (unit.status === 'destroyed' || unit.status === 'surrendered') {
     return null
   }
 
@@ -616,24 +635,26 @@ export function suggestMovement(
         const toEnemyDist = Math.sqrt(toEnemyX * toEnemyX + toEnemyY * toEnemyY)
         const dot = (dx * toEnemyX + dy * toEnemyY) / (displacement * toEnemyDist)
 
+        const weight = CLOSING_WEIGHT[unit.aiStyle] ?? 0.1
         if (unit.aiStyle === 'defensive') {
           const curDist = distance(unit.position, nearestEnemy.position)
           const newDist = distance(newState.position, nearestEnemy.position)
-          score += (newDist - curDist) * 0.1 + 10
+          score += (newDist - curDist) * weight
         } else if (unit.aiStyle === 'cautious') {
-          score += dot * moveDist * 0.8
-          score += (1 - Math.abs(dot)) * moveDist * 0.15 + 10
+          // Closing counts, but so does standing across the enemy's course.
+          score += dot * moveDist * weight
+          score += (1 - Math.abs(dot)) * moveDist * (weight / 3)
         } else {
-          score += dot * moveDist * 3
+          score += dot * moveDist * weight
         }
       }
     }
 
-    score += moveDist * 0.5
+    score += moveDist * MOVE_TIE_BREAKER
 
-    // Score the plan on the shot it actually produces, not just on the arc that
+    // Score the plan on the shot it actually offers, not just on the arc that
     // happens to bear once the turn is over.
-    score += scoreFiringOpportunity(unit, plan, allUnits, windDirection)
+    score += scoreFiringOpportunity(unit, plan, enemies, windDirection)
 
     const projectedPos = projectNextPosition(unit, newState, windDirection)
 
@@ -667,49 +688,4 @@ export function suggestMovement(
     pool.map((i) => planScores[i]),
     difficulty,
   )
-}
-
-/**
- * Decide whether an aggressive AI unit declares a close-quarters action this
- * turn (CLAUDE.md aggressive style). Only aggressive units act:
- *  - already grappled to an enemy → press a `board` action;
- *  - otherwise, if its chosen `plan` lands it within grapple range of an enemy
- *    base → declare a `grapple` against the nearest such enemy.
- * Returns null for any other style/situation.
- */
-export function decideAggressiveAction(
-  unit: Unit,
-  plan: MovementPlan | null,
-  allUnits: Unit[],
-  windDirection: number,
-): AIAction | null {
-  if (unit.aiStyle !== 'aggressive') return null
-  if (unit.status === 'destroyed' || unit.status === 'surrendered') return null
-
-  const isEnemy = (u: Unit) =>
-    u.side !== unit.side && u.status !== 'destroyed' && u.status !== 'surrendered'
-
-  // Already grappled to an enemy → board it (no movement needed).
-  if (unit.grappledWith) {
-    const partner = allUnits.find((u) => u.id === unit.grappledWith)
-    return partner && isEnemy(partner) ? { type: 'board', targetId: partner.id } : null
-  }
-
-  if (!plan) return null
-
-  // Where the plan leaves us; grapple if a base lands within range of an enemy.
-  const final = applyMovementPlan(unit, plan, windDirection)
-  const moved: Unit = { ...unit, position: final.position, orientation: final.orientation }
-
-  let target: Unit | null = null
-  let bestGap = Infinity
-  for (const e of allUnits) {
-    if (!isEnemy(e)) continue
-    const gap = baseGap(moved, e)
-    if (gap <= GRAPPLE_RANGE && gap < bestGap) {
-      bestGap = gap
-      target = e
-    }
-  }
-  return target ? { type: 'grapple', targetId: target.id } : null
 }

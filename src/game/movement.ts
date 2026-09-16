@@ -267,11 +267,12 @@ export function applyMovementPlan(
   tackDirection: 'port' | 'starboard' | null
   distanceTraveled: number
   /**
-   * The track the ship's reference point — the middle of her stern edge —
-   * follows, for drawing. That is the point a player measures her by, so it is
-   * the one whose track reads directly against the table. Where a chunk ends
-   * in a turn it holds both the point the ship arrived at and where the pivot
-   * left her, so the sideways jog of a corner pivot shows on the map.
+   * The track the middle of her stern edge follows, for drawing. Her bearing
+   * is measured to the base centre, but a model is walked along the table by
+   * its stern, so that is the point whose track reads against the table.
+   * Where a chunk ends in a turn it holds both the point the ship arrived at
+   * and where the pivot left her, so the sideways jog of a corner pivot shows
+   * on the map.
    */
   path: { x: number; y: number }[]
   /**
@@ -366,42 +367,14 @@ export function applyMovementPlan(
 }
 
 /**
- * The order a ship will actually carry out this turn: the one entered for her,
- * or, mid-tack with nothing entered, the continuation the rules force on her.
- * A destroyed or surrendered ship is a wreck on the table and goes nowhere,
- * whatever order she may still be carrying.
+ * The order drawn for a ship: the AI's revealed plan. The player's ships are
+ * never given one, and a destroyed or surrendered ship is a wreck on the table
+ * and goes nowhere, whatever order she may still be carrying.
  */
-export function turnOrderFor(unit: Unit, windDirection: number): MovementPlan | null {
+export function turnOrderFor(unit: Unit): MovementPlan | null {
+  if (unit.side !== 'ai') return null
   if (unit.status === 'destroyed' || unit.status === 'surrendered') return null
-  return (
-    (unit.side === 'ai' ? unit.hiddenAIOrder : unit.playerOrder) ??
-    (unit.isInIrons ? buildTackPlan(unit, windDirection) : null)
-  )
-}
-
-/**
- * The pose a ship is in as the turn opens and at the end of each of the five
- * chunks, following her order for the turn. A ship with no order holds her
- * pose throughout.
- */
-export function turnPosesFor(unit: Unit, windDirection: number): Pose[] {
-  const plan = turnOrderFor(unit, windDirection)
-  if (!plan) {
-    const still: Pose = { x: unit.position.x, y: unit.position.y, orientation: unit.orientation }
-    return Array.from({ length: 6 }, () => still)
-  }
-  return applyMovementPlan(unit, plan, windDirection).poses
-}
-
-/**
- * Every unit as it will stand at the end of `chunk` (0 = as the turn opens,
- * 5 = the end of the turn), for previewing the orders on the map.
- */
-export function unitsAtChunk(units: Unit[], windDirection: number, chunk: number): Unit[] {
-  return units.map((u) => {
-    const pose = turnPosesFor(u, windDirection)[Math.max(0, Math.min(5, chunk))]
-    return { ...u, position: { x: pose.x, y: pose.y }, orientation: pose.orientation }
-  })
+  return unit.aiOrder
 }
 
 /**

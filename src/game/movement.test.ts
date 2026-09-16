@@ -17,8 +17,6 @@ import {
   speedMultiplierFromPercent,
   speedMultiplierToPercent,
   turnOrderFor,
-  turnPosesFor,
-  unitsAtChunk,
 } from './movement'
 import type { Pose } from './movement'
 import type { Unit, MovementPlan, MoveChunk, Attitude, SpeedRange } from '../types'
@@ -52,15 +50,10 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     firingArcs: [],
     attitude: 'reaching',
     isInIrons: false,
-    grappledWith: null,
     tackDirection: null,
     prevAttitude: 'reaching',
     prevMoveDistance: 0,
-    hiddenAIOrder: null,
-    playerOrder: null,
-    lastFireChunks: {},
-    hiddenAIFirePlan: null,
-    hiddenAIAction: null,
+    aiOrder: null,
     ...overrides,
   }
 }
@@ -231,10 +224,10 @@ describe('applyMovementPlan', () => {
     expect(result.sweptPoses[1]).toEqual({ x: 100, y: 90, orientation: 0 })
     expect(result.sweptPoses[2]).toEqual(result.poses[1])
 
-    // The drawn track follows the stern midpoint — the reference point a
-    // player measures the model by — and jogs through the pivot rather than
-    // cutting the corner. Bow north with an 80mm base puts the stern 40mm
-    // south of the centre; once the bow is east it is 40mm west of it.
+    // The drawn track follows the stern midpoint — the point a model is walked
+    // along the table by — and jogs through the pivot rather than cutting the
+    // corner. Bow north with an 80mm base puts the stern 40mm south of the
+    // centre; once the bow is east it is 40mm west of it.
     expect(result.path).toHaveLength(7)
     expect(result.path[0]).toEqual({ x: 100, y: 140 })
     expect(result.path[1]).toEqual({ x: 100, y: 130 })
@@ -376,7 +369,7 @@ describe('tacking procedure', () => {
 
     it('refuses a ship already in irons, or one that cannot move', () => {
       expect(canTack(beating({ isInIrons: true }), 'beating')).toBe(false)
-      for (const status of ['immobilised', 'destroyed', 'surrendered', 'grappled'] as const) {
+      for (const status of ['immobilised', 'destroyed', 'surrendered'] as const) {
         expect(canTack(beating({ status }), 'beating')).toBe(false)
       }
     })
@@ -527,52 +520,19 @@ describe('tacking procedure', () => {
   })
 })
 
-describe('previewing a turn chunk by chunk', () => {
+describe('the order drawn for a ship', () => {
   const order = (chunks: MoveChunk[]): MovementPlan => plan(chunks, 0)
 
-  it('uses the order a ship will actually carry out', () => {
-    const wind = 16
-    const ai = makeUnit({ side: 'ai', hiddenAIOrder: order(straight(10)) })
-    const player = makeUnit({ side: 'player', playerOrder: order(straight(10)) })
-    expect(turnOrderFor(ai, wind)).toBe(ai.hiddenAIOrder)
-    expect(turnOrderFor(player, wind)).toBe(player.playerOrder)
-    // Mid-tack with nothing entered, the forced continuation stands in.
-    const tacking = makeUnit({ orientation: 2, isInIrons: true, tackDirection: 'port' })
-    expect(turnOrderFor(tacking, 0)?.isTack).toBe(true)
+  it('is the AI ship\'s revealed order and nothing else', () => {
+    const ai = makeUnit({ side: 'ai', aiOrder: order(straight(10)) })
+    expect(turnOrderFor(ai)).toBe(ai.aiOrder)
+    // The player's ships are never given orders by the app.
+    const player = makeUnit({ side: 'player', aiOrder: order(straight(10)) })
+    expect(turnOrderFor(player)).toBeNull()
     // A wreck goes nowhere, whatever it still carries.
-    const wreck = makeUnit({ side: 'player', status: 'destroyed', playerOrder: order(straight(10)) })
-    expect(turnOrderFor(wreck, wind)).toBeNull()
-  })
-
-  it('holds a ship with no order where she is for the whole turn', () => {
-    const unit = makeUnit({ position: { x: 40, y: 60 }, orientation: 8 })
-    const poses = turnPosesFor(unit, 16)
-    expect(poses).toHaveLength(6)
-    for (const p of poses) expect(p).toEqual({ x: 40, y: 60, orientation: 8 })
-  })
-
-  it('places every ship at the end of the chosen chunk, finishing where the move resolves', () => {
-    const mover = makeUnit({
-      id: 'm', side: 'player', position: { x: 0, y: 0 }, orientation: 8,
-      playerOrder: order([
-        { distance: 10, turn: { direction: 'port', points: 2 } },
-        { distance: 10 }, { distance: 10 }, { distance: 10 }, { distance: 10 },
-      ]),
-    })
-    const still = makeUnit({ id: 's', position: { x: 300, y: 0 }, orientation: 16 })
-
-    const atStart = unitsAtChunk([mover, still], 16, 0)
-    expect(atStart[0].position).toEqual({ x: 0, y: 0 })
-    expect(atStart[0].orientation).toBe(8)
-
-    const afterFirst = unitsAtChunk([mover, still], 16, 1)
-    expect(afterFirst[0].orientation).toBe(6)
-    expect(afterFirst[1].position).toEqual({ x: 300, y: 0 })
-
-    const atEnd = unitsAtChunk([mover, still], 16, 5)
-    const resolved = applyMovementPlan(mover, mover.playerOrder!, 16)
-    expect({ x: Math.round(atEnd[0].position.x), y: Math.round(atEnd[0].position.y) }).toEqual(resolved.position)
-    expect(atEnd[0].orientation).toBe(resolved.orientation)
+    const wreck = makeUnit({ side: 'ai', status: 'destroyed', aiOrder: order(straight(10)) })
+    expect(turnOrderFor(wreck)).toBeNull()
+    expect(turnOrderFor(makeUnit({ side: 'ai' }))).toBeNull()
   })
 })
 

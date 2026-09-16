@@ -1,20 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
-  evaluatePosition, suggestMovement, decideAggressiveAction, basesWithinGrapple, scoreTack,
+  evaluatePosition, suggestMovement, basesInContact, scoreTack,
 } from './ai'
 import { applyMovementPlan, projectTackCompletion } from './movement'
-import { computeAIFirePlan } from './combat'
-import { centerFromSternMidpoint } from '../utils/coordinates'
+import { bestShotDuringMove } from './combat'
 import { computeAttitude } from '../utils/attitude'
 import { distance } from '../utils/geometry'
 import { baseCorners, polygonsIntersect } from '../utils/geometry'
 import type { Unit, Attitude, ArcSide, SpeedRange, FiringArc, MovementPlan, TableTerrain } from '../types'
-
-const IDLE_PLAN: MovementPlan = {
-  chunks: [{ distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }, { distance: 0 }],
-  totalTurnPoints: 0,
-  effectiveMaxSpeed: 0,
-}
 
 const SPEED_PROFILE: Record<Attitude, SpeedRange> = {
   in_irons: { max: 0 },
@@ -71,15 +64,10 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     firingArcs: [],
     attitude: 'reaching',
     isInIrons: false,
-    grappledWith: null,
     tackDirection: null,
     prevAttitude: 'reaching',
     prevMoveDistance: 0,
-    hiddenAIOrder: null,
-    playerOrder: null,
-    lastFireChunks: {},
-    hiddenAIFirePlan: null,
-    hiddenAIAction: null,
+    aiOrder: null,
     ...overrides,
   }
 }
@@ -135,46 +123,18 @@ describe('evaluatePosition', () => {
   })
 })
 
-describe('basesWithinGrapple', () => {
-  // bases are 30 (width) × 80 (length); along +x the length spans ±40.
+describe('basesInContact', () => {
+  // Two 30×80 bases heading east, 90mm apart centre to centre → 10mm gap.
   const a = makeUnit({ position: { x: 500, y: 500 }, orientation: 8 })
 
   it('is true when bases nearly touch (gap ≤ 20mm)', () => {
     const b = makeUnit({ position: { x: 590, y: 500 }, orientation: 8 }) // 10mm gap
-    expect(basesWithinGrapple(a, b)).toBe(true)
+    expect(basesInContact(a, b)).toBe(true)
   })
 
   it('is false when bases are well apart', () => {
     const b = makeUnit({ position: { x: 700, y: 500 }, orientation: 8 }) // 120mm gap
-    expect(basesWithinGrapple(a, b)).toBe(false)
-  })
-})
-
-describe('decideAggressiveAction', () => {
-  it('declares a grapple when the plan ends within reach of an enemy', () => {
-    const unit = makeUnit({ aiStyle: 'aggressive', position: { x: 500, y: 500 }, orientation: 8 })
-    const foe = makeUnit({ id: 'e1', side: 'player', position: { x: 590, y: 500 }, orientation: 8 })
-    const action = decideAggressiveAction(unit, IDLE_PLAN, [unit, foe], 16)
-    expect(action).toEqual({ type: 'grapple', targetId: 'e1' })
-  })
-
-  it('boards the enemy it is already grappled to', () => {
-    const foe = makeUnit({ id: 'e1', side: 'player', status: 'grappled', grappledWith: 'u1' })
-    const unit = makeUnit({ aiStyle: 'aggressive', status: 'grappled', grappledWith: 'e1' })
-    const action = decideAggressiveAction(unit, null, [unit, foe], 16)
-    expect(action).toEqual({ type: 'board', targetId: 'e1' })
-  })
-
-  it('returns null for non-aggressive styles even when adjacent', () => {
-    const unit = makeUnit({ aiStyle: 'cautious', position: { x: 500, y: 500 }, orientation: 8 })
-    const foe = makeUnit({ id: 'e1', side: 'player', position: { x: 590, y: 500 }, orientation: 8 })
-    expect(decideAggressiveAction(unit, IDLE_PLAN, [unit, foe], 16)).toBeNull()
-  })
-
-  it('returns null when no enemy is within grapple reach', () => {
-    const unit = makeUnit({ aiStyle: 'aggressive', position: { x: 500, y: 500 }, orientation: 8 })
-    const foe = makeUnit({ id: 'e1', side: 'player', position: { x: 800, y: 500 }, orientation: 8 })
-    expect(decideAggressiveAction(unit, IDLE_PLAN, [unit, foe], 16)).toBeNull()
+    expect(basesInContact(a, b)).toBe(false)
   })
 })
 
@@ -182,7 +142,7 @@ describe('suggestMovement', () => {
   const enemy = makeUnit({ id: 'e1', side: 'player', position: { x: 600, y: 500 }, firingArcs: [STARBOARD_ARC] })
 
   it('returns null for a unit that cannot act', () => {
-    for (const status of ['destroyed', 'surrendered', 'grappled'] as const) {
+    for (const status of ['destroyed', 'surrendered'] as const) {
       const unit = makeUnit({ status, firingArcs: [STARBOARD_ARC] })
       expect(suggestMovement(unit, [unit, enemy], [], 0, null)).toBeNull()
     }
@@ -506,7 +466,7 @@ describe('tacking as an AI choice', () => {
   })
 })
 
-describe('choosing a move that actually fires', () => {
+describe('choosing a move that leaves a shot to take', () => {
   const BROADSIDES: FiringArc[] = [
     makeArc('p', 'port'),
     makeArc('s', 'starboard'),
@@ -517,18 +477,24 @@ describe('choosing a move that actually fires', () => {
     effectiveMaxSpeed: 0,
   }
 
+  /** Base centre for a ship whose stern midpoint and heading are known. */
+  const centerFromStern = (stern: { x: number; y: number }, orientation: number, baseLength: number) => {
+    const angle = (orientation * Math.PI) / 16 - Math.PI / 2
+    return { x: stern.x + Math.cos(angle) * (baseLength / 2), y: stern.y + Math.sin(angle) * (baseLength / 2) }
+  }
+
   // The reported case: a player ship at the origin heading SSE, with the AI
-  // 131mm east and 47mm south of it heading NNW. Positions are entered as the
-  // middle of the stern, so the base centres are derived from them.
+  // 131mm east and 47mm south of her stern heading NNW — alongside, port
+  // broadside bearing at point-blank range.
   const reportedSituation = (aiStyle: Unit['aiStyle'] = 'cautious') => {
     const player = makeUnit({
       id: 'p1', side: 'player', orientation: 14,
-      position: centerFromSternMidpoint({ x: 0, y: 0 }, 14, 80),
+      position: centerFromStern({ x: 0, y: 0 }, 14, 80),
       firingArcs: BROADSIDES,
     })
     const ai = makeUnit({
       id: 'ai1', side: 'ai', aiStyle, orientation: 30,
-      position: centerFromSternMidpoint({ x: 131, y: 47 }, 30, 80),
+      position: centerFromStern({ x: 131, y: 47 }, 30, 80),
       firingArcs: BROADSIDES,
     })
     return { ai, player }
@@ -536,35 +502,35 @@ describe('choosing a move that actually fires', () => {
 
   it('has a broadside bearing at point-blank range to begin with', () => {
     const { ai, player } = reportedSituation()
-    expect(computeAIFirePlan({ ...ai, hiddenAIOrder: STATIONARY }, [ai, player], 0)).toMatchObject({
+    expect(bestShotDuringMove(ai, STATIONARY, [player], 0)).toMatchObject({
       arcSide: 'port',
       targetId: 'p1',
     })
   })
 
-  it('does not turn that broadside away — the move it picks still fires', () => {
+  it('does not turn that broadside away — the move it picks still offers the shot', () => {
     // Wind from the north leaves this ship in irons and unable to sail, so the
     // only thing on offer is a turn. It used to spend that turn swinging the
-    // target out of the port arc and into a blind spot, and fire nothing.
+    // target out of the port arc and into a blind spot, leaving nothing to fire.
     for (const style of ['aggressive', 'cautious', 'defensive'] as const) {
       const { ai, player } = reportedSituation(style)
       const unit = { ...ai, attitude: computeAttitude(0, ai.orientation, false) }
       const plan = suggestMovement(unit, [unit, player], [], 0, unit.attitude)
       expect(plan).not.toBeNull()
-      const fire = computeAIFirePlan({ ...unit, hiddenAIOrder: plan }, [unit, player], 0)
-      expect(fire, `${style} threw away its shot`).not.toBeNull()
+      const shot = bestShotDuringMove(unit, plan!, [player], 0)
+      expect(shot, `${style} threw away its shot`).not.toBeNull()
     }
   })
 
-  it('prefers the plan that gets the guns off, all else being close', () => {
+  it('prefers the plan that keeps the guns bearing, all else being close', () => {
     // Wind on the beam, so the ship can sail and has real choices to weigh.
     const { ai, player } = reportedSituation('cautious')
     const unit = { ...ai, attitude: computeAttitude(8, ai.orientation, false) }
     const plan = suggestMovement(unit, [unit, player], [], 8, unit.attitude)
-    expect(computeAIFirePlan({ ...unit, hiddenAIOrder: plan }, [unit, player], 8)).not.toBeNull()
+    expect(bestShotDuringMove(unit, plan!, [player], 8)).not.toBeNull()
   })
 
-  it('still lets an aggressive ship close to board rather than stand off and shoot', () => {
+  it('still lets an aggressive ship close to contact rather than stand off and shoot', () => {
     // Losing a broadside to get alongside is the aggressive style working as
     // intended, so the firing term must not override it.
     const { ai, player } = reportedSituation('aggressive')

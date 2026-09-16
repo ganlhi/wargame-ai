@@ -1,6 +1,6 @@
 import type {
-  ArcSide, FiringArc, GameState, GunProfile, GunType, Scale, ShipTemplate, ShipType,
-  TableTerrain, TerrainShape, WindStrength,
+  AIStyle, ArcSide, Attitude, FiringArc, GameState, GunProfile, GunType, Scale, ShipTemplate,
+  ShipType, TableTerrain, TerrainShape, Unit, UnitSide, UnitStatus, WindStrength,
 } from '../types'
 import { GUN_TYPES, SCALES, SHIP_TYPES, WIND_STRENGTHS } from '../types'
 import { normaliseSpeedMultiplier, tackTurnDirection } from '../game/movement'
@@ -8,6 +8,12 @@ import {
   DEFAULT_SHIP_TYPE, REFERENCE_SCALE, gunRanges, nearestGunType, nearestShipType,
 } from '../data/binder'
 import { shipStats } from '../game/shipStats'
+import { computeAttitude } from '../utils/attitude'
+
+const UNIT_SIDES: readonly UnitSide[] = ['player', 'ai']
+const UNIT_STATUSES: readonly UnitStatus[] = ['active', 'immobilised', 'destroyed', 'surrendered']
+const AI_STYLES: readonly AIStyle[] = ['aggressive', 'cautious', 'defensive']
+const ATTITUDES: readonly Attitude[] = ['in_irons', 'beating', 'reaching', 'quarter_reaching', 'running']
 
 /**
  * Bump this whenever the persisted save shape changes, and add the
@@ -37,8 +43,19 @@ import { shipStats } from '../game/shipStats'
  *     about the distances she was given — and everything is re-read from
  *     there. The scale and weather a pre-11 save was played at were never
  *     recorded, so it is read as 1/1200 in a moderate breeze.
+ * 12 — the app stops simulating the game. The turn counter, the log, the
+ *     player's orders, the AI's fire plan and its reloading state all go; the
+ *     AI's order is `aiOrder`, and `currentPhase` becomes `phase` (`input` |
+ *     `orders`). Grappling is resolved at the table and is no longer tracked:
+ *     the `grappled` status becomes `immobilised`, which is what it meant for
+ *     movement, and `grappledWith` goes. Only a ship may be
+ *     the origin, so a save anchored on terrain is re-anchored on its first
+ *     ship. Orders laid by an older build were laid against a simulated
+ *     table, so they are dropped and the save opens at `input`. Positions are
+ *     unchanged: `Unit.position` was always the base centre, and terrain's
+ *     centre is what a bearing measures to.
  */
-export const CURRENT_SCHEMA_VERSION = 11
+export const CURRENT_SCHEMA_VERSION = 12
 
 type RawRecord = Record<string, unknown>
 
@@ -184,70 +201,92 @@ export function normaliseShipTemplate(raw: unknown): ShipTemplate | null {
   }
 }
 
+/** A point out of a raw record, or the origin when it is missing or malformed. */
+function pointOf(raw: unknown): { x: number; y: number } {
+  const p = (raw ?? {}) as RawRecord
+  const x = Number(p.x)
+  const y = Number(p.y)
+  return { x: Number.isFinite(x) ? x : 0, y: Number.isFinite(y) ? y : 0 }
+}
+
 /**
  * Normalise a raw object parsed from localStorage (any historical shape) into a
  * current-schema `GameState`. This is the single place legacy save formats are
- * reconciled — e.g. the old `settings.*` nesting, missing per-unit fields, and
- * the pre-infinite-table model that carried table dimensions and a background
- * photo.
+ * reconciled — e.g. the old `settings.*` nesting, missing per-unit fields, the
+ * pre-infinite-table model that carried table dimensions and a background
+ * photo, and the simulation state (turn counter, log, player orders, fire
+ * plans) that the app no longer keeps.
  */
 export function migrateSavedGame(raw: RawRecord): GameState {
   const settings = (raw.settings ?? {}) as RawRecord
-  const windDirection = (raw.windDirection ?? settings.windDirection ?? 0) as number
+  const windDirection = Number(raw.windDirection ?? settings.windDirection ?? 0)
   // Neither was recorded before schema 11. A save from then holds speeds and
   // ranges that were typed in rather than read off a chart, so what they are
   // matched against has to be assumed; 1/1200 in a moderate breeze is the
   // middle of the charts and so the least distorting reading.
   const scale = oneOf(SCALES, raw.scale, '1/1200')
   const windStrength = oneOf(WIND_STRENGTHS, raw.windStrength, 'moderate_breeze')
+  // Orders from before 12 were laid against a table the app was simulating,
+  // fire plans included, so they are not carried over.
+  const current = Number(raw.schemaVersion ?? 0) >= 12
 
   const terrain = ((raw.terrain ?? []) as RawRecord[]).map(migrateTerrain)
-  const units = ((raw.units ?? []) as RawRecord[]).map((u) => {
+  const units: Unit[] = ((raw.units ?? []) as RawRecord[]).map((u) => {
     const shipType = shipTypeOf(u, windStrength, scale)
+    const orientation = ((Math.round(Number(u.orientation ?? 0)) % 32) + 32) % 32
+    const foreAndAftRigged = Boolean(u.foreAndAftRigged ?? false)
+    const attitude = computeAttitude(windDirection, orientation, foreAndAftRigged)
+    const isInIrons = attitude === 'in_irons'
+    const prevMoveDistance = Number(u.prevMoveDistance)
+    const prevAttitude = u.prevAttitude
     return {
-      ...u,
-      prevAttitude: u.prevAttitude ?? 'reaching',
-      // `null` = no movement phase resolved yet (schema 6). Pre-6 saves stored 0
-      // for both "never moved" and "genuinely didn't move", so they keep 0 rather
-      // than silently gaining a half-max minimum mid-game.
-      prevMoveDistance: (u.prevMoveDistance ?? null) as number | null,
-      hiddenAIOrder: u.hiddenAIOrder ?? null,
-      playerOrder: u.playerOrder ?? null,
-      foreAndAftRigged: u.foreAndAftRigged ?? false,
-      // A ship already in irons in a pre-8 save has no recorded swing direction.
-      // Deriving it from its heading sends it out on the tack it is nearer to,
-      // which is the only sensible reading of a state the save never captured.
-      tackDirection:
-        (u.tackDirection as 'port' | 'starboard' | null | undefined) ??
-        (u.isInIrons ? tackTurnDirection(Number(u.orientation ?? 0), windDirection) : null),
-      baseWidth: u.baseWidth ?? 30,
-      baseLength: u.baseLength ?? 80,
-      grappledWith: u.grappledWith ?? null,
-      lastFireChunks: (u.lastFireChunks ?? {}) as Partial<Record<ArcSide, number>>,
-      // A fire plan from before schema 10 records no range band, and was chosen
-      // against gun data that has since been reshaped — so it is stale rather
-      // than merely incomplete. Dropping it costs at most one turn's declared
-      // shot on a game saved mid-reveal.
-      hiddenAIFirePlan:
-        u.hiddenAIFirePlan && (u.hiddenAIFirePlan as RawRecord).band ? u.hiddenAIFirePlan : null,
-      hiddenAIAction: u.hiddenAIAction ?? null,
-      speedMultiplier: normaliseSpeedMultiplier(Number(u.speedMultiplier ?? 1)),
+      id: String(u.id ?? ''),
+      name: String(u.name ?? ''),
+      side: oneOf(UNIT_SIDES, u.side, 'player'),
+      position: pointOf(u.position),
+      orientation,
+      // A ship grappled in an older save could not move; that is what
+      // immobilised means, and the grapple itself is now the table's business.
+      status: u.status === 'grappled' ? 'immobilised' : oneOf(UNIT_STATUSES, u.status, 'active'),
+      aiStyle: oneOf(AI_STYLES, u.aiStyle, 'cautious'),
       // Speeds, drift and turning are the charts' to give, so whatever the save
       // holds for them is thrown away and read back from the ship's type.
       shipType,
       ...shipStats(shipType, { scale, windStrength }),
+      foreAndAftRigged,
+      speedMultiplier: normaliseSpeedMultiplier(Number(u.speedMultiplier ?? 1)),
+      baseWidth: Number(u.baseWidth ?? 30),
+      baseLength: Number(u.baseLength ?? 80),
       firingArcs: ((u.firingArcs ?? []) as RawRecord[]).map((arc, i) =>
         migrateFiringArc(arc, i, scale),
       ),
+      attitude,
+      isInIrons,
+      // A ship already in irons in a pre-8 save has no recorded swing direction.
+      // Deriving it from its heading sends it out on the tack it is nearer to,
+      // which is the only sensible reading of a state the save never captured.
+      tackDirection:
+        u.tackDirection === 'port' || u.tackDirection === 'starboard'
+          ? u.tackDirection
+          : isInIrons
+            ? tackTurnDirection(orientation, windDirection)
+            : null,
+      prevAttitude: ATTITUDES.includes(prevAttitude as Attitude) ? (prevAttitude as Attitude) : null,
+      // `null` = never been given an order, which gives a half-of-maximum
+      // minimum move.
+      prevMoveDistance: Number.isFinite(prevMoveDistance) ? prevMoveDistance : null,
+      aiOrder: current ? ((u.aiOrder ?? null) as Unit['aiOrder']) : null,
     }
-  }) as GameState['units']
+  })
 
-  // Pre-v5 saves have no origin. World coordinates stay exactly as they were —
-  // only the frame they are *reported* in changes — so adopting the first unit
-  // (or, failing that, the first terrain piece) re-anchors the readouts without
-  // moving anything on the table.
+  // Only a ship can be the origin. A save anchored on a terrain piece (allowed
+  // before 12), or on nothing, is re-anchored on its first ship; world
+  // coordinates stay exactly as they were, so nothing moves on the table.
+  const requested = raw.originId
   const originId =
-    (raw.originId as string | null | undefined) ?? units[0]?.id ?? terrain[0]?.id ?? null
+    typeof requested === 'string' && units.some((u) => u.id === requested)
+      ? requested
+      : units[0]?.id ?? null
 
   return {
     id: raw.id as string,
@@ -261,8 +300,6 @@ export function migrateSavedGame(raw: RawRecord): GameState {
     scale,
     terrain,
     units,
-    currentTurn: (raw.currentTurn ?? 1) as number,
-    currentPhase: (raw.currentPhase ?? 'setup') as GameState['currentPhase'],
-    actionLog: (raw.actionLog ?? []) as GameState['actionLog'],
+    phase: current && raw.phase === 'orders' ? 'orders' : 'input',
   }
 }

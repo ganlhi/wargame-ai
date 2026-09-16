@@ -1,18 +1,21 @@
 import type { Attitude, FiringArc, GameState, Scale, ShipType, SpeedRange, Unit, WindStrength } from '../types'
 import { RANGE_BANDS } from '../types'
 import { driftSpeed, gunRanges, speedProfile, turnPoints } from '../data/binder'
+import { computeAttitude } from '../utils/attitude'
 
 /**
- * Everything about a game that the binder's charts are read against: the scale
- * the models are built to and how hard it is blowing.
+ * Everything about a game that a ship's cached figures are read against: the
+ * scale the models are built to, how hard it is blowing, and which way — the
+ * charts need the first two, her attitude the third.
  */
 export interface Conditions {
   scale: Scale
   windStrength: WindStrength
+  windDirection: number
 }
 
-export function conditionsOf(game: Pick<GameState, 'scale' | 'windStrength'>): Conditions {
-  return { scale: game.scale, windStrength: game.windStrength }
+export function conditionsOf(game: Pick<GameState, 'scale' | 'windStrength' | 'windDirection'>): Conditions {
+  return { scale: game.scale, windStrength: game.windStrength, windDirection: game.windDirection }
 }
 
 /**
@@ -21,7 +24,7 @@ export function conditionsOf(game: Pick<GameState, 'scale' | 'windStrength'>): C
  */
 export function shipStats(
   shipType: ShipType,
-  { scale, windStrength }: Conditions,
+  { scale, windStrength }: Pick<Conditions, 'scale' | 'windStrength'>,
 ): { maxTurnPoints: number; speedProfile: Record<Attitude, SpeedRange>; driftSpeed: number } {
   return {
     maxTurnPoints: turnPoints(shipType),
@@ -54,9 +57,10 @@ function sameRanges(unit: Unit, scale: Scale): boolean {
 }
 
 /**
- * A unit with its looked-up figures brought back in line with the charts:
- * speeds and drift from her type, the scale and the weather, turning from her
- * type, and every gun's ranges from its type and the scale.
+ * A unit with its looked-up figures brought back in line with the charts and
+ * the wind: speeds and drift from her type, the scale and the weather, turning
+ * from her type, every gun's ranges from its type and the scale, and her
+ * attitude from her heading and the wind's direction.
  *
  * Those fields are caches, not settings — nothing in the app ever writes them
  * by hand, so running this over a unit whenever she or the conditions change
@@ -65,14 +69,30 @@ function sameRanges(unit: Unit, scale: Scale): boolean {
  */
 export function resolveUnit(unit: Unit, conditions: Conditions): Unit {
   const stats = shipStats(unit.shipType, conditions)
-  if (sameStats(unit, stats) && sameRanges(unit, conditions.scale)) return unit
-  return { ...unit, ...stats, firingArcs: resolveArcs(unit.firingArcs, conditions.scale) }
+  const attitude = computeAttitude(conditions.windDirection, unit.orientation, unit.foreAndAftRigged)
+  const isInIrons = attitude === 'in_irons'
+  if (
+    sameStats(unit, stats) &&
+    sameRanges(unit, conditions.scale) &&
+    unit.attitude === attitude &&
+    unit.isInIrons === isInIrons
+  ) {
+    return unit
+  }
+  return {
+    ...unit,
+    ...stats,
+    firingArcs: resolveArcs(unit.firingArcs, conditions.scale),
+    attitude,
+    isInIrons,
+  }
 }
 
 /**
- * The game with every ship re-rated against its scale and wind strength. Run
- * on load and on every write that could change any of the three, so nothing
- * downstream ever has to wonder whether a speed or a range is stale.
+ * The game with every ship re-rated against its scale, wind strength and wind
+ * direction. Run on load and on every write that could change any of them, so
+ * nothing downstream ever has to wonder whether a speed, a range or an
+ * attitude is stale.
  */
 export function resolveGame(game: GameState): GameState {
   const conditions = conditionsOf(game)

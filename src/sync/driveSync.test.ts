@@ -92,9 +92,7 @@ function makeGame(id: string, name: string, createdAt = '2026-01-01T00:00:00.000
     scale: '1/1200',
     terrain: [],
     units: [],
-    currentTurn: 1,
-    currentPhase: 'setup',
-    actionLog: [],
+    phase: 'input',
   }
 }
 

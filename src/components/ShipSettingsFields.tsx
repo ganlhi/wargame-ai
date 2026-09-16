@@ -163,8 +163,8 @@ export function GunsFields({
           What a shot is worth falls away with the range &mdash;{' '}
           {RANGE_BANDS.map((b) => `${RANGE_BAND_LABELS[b].toLowerCase()} ×${RANGE_BAND_MODIFIERS[b]}`)
             .join(', ')}{' '}
-          &mdash; which is what the AI weighs a shot by when it decides whether, and when in
-          the move, to fire.
+          &mdash; which is what the AI weighs a position by. Every ship carries her guns, the
+          player's included: they are how the AI judges how dangerous she is.
         </p>
       </div>
       {ARC_SIDES.map((arcSide) => {
@@ -238,8 +238,7 @@ function ChartedFigures({
  * The fields for what is a ship's own whatever game she is in — her type, rig,
  * base and how hard she is being worked. Shared by the unit form and the
  * saved-ship form, so a class is edited the same way wherever it is met. Guns
- * are a separate block ({@link GunsFields}) because the unit form only shows
- * them for AI ships.
+ * are a separate block ({@link GunsFields}) so each form can place them.
  *
  * `conditions` is the game she is in, when she is in one. The library on the
  * home page belongs to no game, so there her speeds cannot be quoted — only

@@ -16,10 +16,9 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     },
     speedMultiplier: 1,
     driftSpeed: 10, baseWidth: 30, baseLength: 80, firingArcs: [],
-    attitude: 'reaching', isInIrons: false, grappledWith: null, tackDirection: null,
+    attitude: 'reaching', isInIrons: false, tackDirection: null,
     prevAttitude: 'reaching', prevMoveDistance: null,
-    hiddenAIOrder: null, playerOrder: null, lastFireChunks: {},
-    hiddenAIFirePlan: null, hiddenAIAction: null,
+    aiOrder: null,
     ...overrides,
   }
 }
@@ -29,7 +28,7 @@ function makeGame(overrides: Partial<GameState> = {}): GameState {
     id: 'g1', name: 'Test', createdAt: '', updatedAt: '', schemaVersion: 6,
     originId: null, windDirection: 0, windStrength: 'moderate_breeze', scale: '1/1200',
     terrain: [], units: [],
-    currentTurn: 1, currentPhase: 'setup', actionLog: [],
+    phase: 'input',
     ...overrides,
   }
 }

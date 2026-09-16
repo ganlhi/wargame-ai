@@ -8,13 +8,11 @@ import type { Unit, UnitSide, AIStyle, UnitStatus, ShipSettings, ShipTemplate } 
 import { cloneShipSettings, findTemplateByName } from '../utils/shipTemplates'
 import { REFERENCE_SCALE } from '../data/binder'
 import { conditionsOf, shipStats } from '../game/shipStats'
-import { OffsetInput } from './OffsetInput'
+import { BearingInput } from './BearingInput'
 import { Select } from './Select'
 import { GunsFields, ShipSettingsFields } from './ShipSettingsFields'
 import { draftFromSettings, settingsFromDraft } from '../utils/shipSettingsDraft'
-import {
-  centerFromSternMidpoint, fromOffset, originName, originPoint, sternMidpoint, toOffset,
-} from '../utils/coordinates'
+import { fromBearing, originName, originPoint, toBearing } from '../utils/coordinates'
 
 function OrientationSlider({
   initial,
@@ -35,7 +33,7 @@ function OrientationSlider({
 
   return (
     <div>
-      <label className="block text-xs text-gray-400 mb-1">Orientation</label>
+      <label className="block text-xs text-gray-400 mb-1">Heading</label>
       <div className="flex gap-2 items-center">
         <input
           type="range"
@@ -223,8 +221,8 @@ function SavedShipsSection({
 interface UnitFormModalProps {
   unit?: Unit
   /**
-   * Reference point (middle of the base's rear edge) in world coordinates,
-   * pre-filled from a click on the battlefield.
+   * Base centre in world coordinates, pre-filled from a tap on the battlefield.
+   * It is read into the form as a bearing, so it lands rounded to the rose.
    */
   defaultPosition?: { x: number; y: number }
   onSave: (unit: Unit) => void
@@ -237,7 +235,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
   // The unit form only ever opens inside a game, so the scale and weather her
   // speeds and ranges are read against are always to hand.
   const conditions = conditionsOf(
-    currentGame ?? { scale: REFERENCE_SCALE, windStrength: 'moderate_breeze' },
+    currentGame ?? { scale: REFERENCE_SCALE, windStrength: 'moderate_breeze', windDirection: 0 },
   )
   const [name, setName] = useState(unit?.name ?? '')
   const [side, setSide] = useState<UnitSide>(unit?.side ?? 'player')
@@ -249,21 +247,17 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
 
   const origin = currentGame ? originPoint(currentGame) : { x: 0, y: 0 }
   const anchorName = currentGame ? originName(currentGame) : null
-  // The first entity on the table defines the origin, so it has nothing to be
-  // offset from; an existing origin unit keeps reading (0, 0) by definition.
-  const isFirstEntity = !currentGame?.originId
+  // The first ship on the table becomes the origin, so she has nothing to be
+  // measured from; an existing origin ship keeps reading *origin* by definition.
+  const isFirstShip = !currentGame?.originId
   const isOrigin = !!unit && currentGame?.originId === unit.id
 
-  // A ship is placed by the middle of its base's rear edge — where a ruler is
-  // held against the model — so that, and not the base centre, is what the form
-  // edits. `Unit.position` (the centre) is derived from it on save, which means
-  // changing the orientation pivots the model about its stern.
-  const [offset, setOffset] = useState(() => {
-    if (unit) {
-      return toOffset(sternMidpoint(unit.position, unit.orientation, unit.baseLength), origin)
-    }
-    if (defaultPosition) return toOffset(defaultPosition, origin)
-    return { east: 0, south: 0 }
+  // A ship is placed by the centre of her base, as a bearing from the origin
+  // ship — the reading a player takes across the table.
+  const [bearing, setBearing] = useState(() => {
+    if (unit) return toBearing(unit.position, origin)
+    if (defaultPosition) return toBearing(defaultPosition, origin)
+    return { direction: 0, distance: 0 }
   })
 
   const computedAttitude = computeAttitude(windDirection, orientation, draft.foreAndAftRigged)
@@ -280,11 +274,13 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
     if (!name.trim()) return
-    const reference =
-      isFirstEntity || isOrigin
-        ? (unit ? sternMidpoint(unit.position, unit.orientation, unit.baseLength) : { x: 0, y: 0 })
-        : fromOffset(offset, origin)
-    const center = centerFromSternMidpoint(reference, orientation, currentSettings.baseLength)
+    // The origin ship is wherever she is — she reads *origin* by definition —
+    // and the very first ship is put at the world origin, since nothing else
+    // exists yet to measure her from.
+    const center =
+      isFirstShip ? { x: 0, y: 0 }
+      : isOrigin && unit ? unit.position
+      : fromBearing(bearing, origin)
     onSave({
       id: unit?.id ?? uuid(),
       name: name.trim(),
@@ -293,36 +289,24 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       orientation,
       status,
       aiStyle: side === 'ai' ? aiStyle : 'cautious',
-      // Gun layouts are only entered for AI ships — the player rolls their own
-      // fire — but anything already on the unit is kept, so flipping a ship to
-      // the player's side and back does not throw its armament away.
       ...currentSettings,
       // Speeds, drift and turning are the charts', read off her type against
       // this game's scale and weather rather than entered anywhere.
       ...shipStats(currentSettings.shipType, conditions),
       attitude: computedAttitude,
-      prevAttitude: computedAttitude,
-      // No movement phase resolved yet: this turn's minimum comes from half
-      // the maximum rather than half of a previous move.
+      isInIrons: computedAttitude === 'in_irons',
+      // What the AI remembers of its own last order is not the form's to edit.
+      prevAttitude: unit?.prevAttitude ?? null,
       prevMoveDistance: unit?.prevMoveDistance ?? null,
-      hiddenAIOrder: null,
-      playerOrder: null,
-      hiddenAIFirePlan: null,
-      hiddenAIAction: null,
-      lastFireChunks: unit?.lastFireChunks ?? {},
-      isInIrons: false,
-      // Grapple is a mutual relationship managed via the canvas unit panel
-      // (setGrapple), not edited here — preserve whatever it currently is.
-      grappledWith: unit?.grappledWith ?? null,
-      // A tack in progress is movement state, not something the form edits.
       tackDirection: unit?.tackDirection ?? null,
+      aiOrder: null,
     })
   }
 
   return (
     <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
       <div className="bg-gray-900 border border-gray-700 rounded-xl p-5 mx-2 max-w-md w-full max-h-[90vh] overflow-y-auto">
-        <h2 className="text-base font-semibold mb-4">{unit ? 'Edit Unit' : 'New Unit'}</h2>
+        <h2 className="text-base font-semibold mb-4">{unit ? 'Edit Ship' : 'New Ship'}</h2>
         <form onSubmit={handleSubmit} className="space-y-3.5">
 
           <SavedShipsSection shipName={name} settings={currentSettings} onImport={importTemplate} />
@@ -361,19 +345,19 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
           </div>
 
           <div className="border-t border-b border-gray-800 py-3">
-            {isFirstEntity || isOrigin ? (
+            {isFirstShip || isOrigin ? (
               <p className="text-xs text-gray-500">
                 {isOrigin
-                  ? 'This ship is the coordinate origin — it reads (0, 0) wherever it sails, and everything else is measured from the middle of its stern.'
-                  : 'This is the first thing on the table, so it becomes the coordinate origin. Everything placed afterwards is measured from the middle of its stern.'}
+                  ? 'This ship is the origin: she reads origin wherever she sails, and every other position is a bearing from the centre of her base.'
+                  : 'This is the first ship on the table, so she becomes the origin. Everything placed afterwards is a bearing from the centre of her base.'}
               </p>
             ) : (
               <>
                 <p className="text-xs text-gray-400 mb-2">
-                  Middle of the stern, measured from{' '}
-                  <span className="text-gray-200">{anchorName ?? 'the origin'}</span>
+                  Centre of the base, from{' '}
+                  <span className="text-gray-200">{anchorName ?? 'the origin ship'}</span>
                 </p>
-                <OffsetInput value={offset} onChange={setOffset} />
+                <BearingInput value={bearing} onChange={setBearing} />
               </>
             )}
           </div>
@@ -395,7 +379,6 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
               className="w-full"
               options={[
                 { value: 'active', label: 'Active' },
-                { value: 'grappled', label: 'Grappled' },
                 { value: 'immobilised', label: 'Immobilised' },
                 { value: 'destroyed', label: 'Destroyed' },
                 { value: 'surrendered', label: 'Surrendered' },
@@ -422,13 +405,13 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
 
           <ShipSettingsFields draft={draft} onChange={setDraft} conditions={conditions} />
 
-          {side === 'ai' && (
-            <GunsFields
-              arcGuns={draft.arcGuns}
-              scale={conditions.scale}
-              onChange={(arcGuns) => setDraft({ ...draft, arcGuns })}
-            />
-          )}
+          {/* Every ship carries her guns, the player's included: the AI
+              judges how dangerous an enemy is by what she mounts. */}
+          <GunsFields
+            arcGuns={draft.arcGuns}
+            scale={conditions.scale}
+            onChange={(arcGuns) => setDraft({ ...draft, arcGuns })}
+          />
 
           <div className="flex gap-2 pt-2">
             <button
@@ -436,7 +419,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
               disabled={!name.trim()}
               className="flex-1 bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
             >
-              {unit ? 'Save Changes' : 'Add Unit'}
+              {unit ? 'Save Changes' : 'Add Ship'}
             </button>
             <button
               type="button"
