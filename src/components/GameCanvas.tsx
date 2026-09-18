@@ -573,7 +573,7 @@ export function GameCanvas({
 
   /**
    * Put the entity being relocated where the water was tapped. The tap is read
-   * as a bearing from the origin ship — the nearest of the 16 points and the
+   * as a bearing from the origin ship — the nearest of the 32 points and the
    * nearest millimetre — and laid back out from there, so what lands is
    * exactly what the form would show, not the raw tap.
    */

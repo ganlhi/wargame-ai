@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
-  COMPASS_16, formatBearing, formatDisplacement, fromBearing, originName, originPoint, toBearing,
-  unitReferencePoint,
+  BEARING_POINTS, formatBearing, formatDisplacement, fromBearing, originName, originPoint,
+  toBearing, unitReferencePoint,
 } from './coordinates'
+import { COMPASS_LABELS } from './attitude'
 import type { GameState, TableTerrain, Unit } from '../types'
 
 function makeUnit(overrides: Partial<Unit> = {}): Unit {
@@ -62,28 +63,28 @@ const O = { x: 0, y: 0 }
 
 describe('toBearing', () => {
   it('reads the cardinal points off the world frame (+x east, +y south)', () => {
-    expect(toBearing({ x: 0, y: -420 }, O)).toEqual({ direction: COMPASS_16.indexOf('N'), distance: 420 })
-    expect(toBearing({ x: 420, y: 0 }, O)).toEqual({ direction: COMPASS_16.indexOf('E'), distance: 420 })
-    expect(toBearing({ x: 0, y: 420 }, O)).toEqual({ direction: COMPASS_16.indexOf('S'), distance: 420 })
-    expect(toBearing({ x: -420, y: 0 }, O)).toEqual({ direction: COMPASS_16.indexOf('W'), distance: 420 })
+    expect(toBearing({ x: 0, y: -420 }, O)).toEqual({ direction: COMPASS_LABELS.indexOf('N'), distance: 420 })
+    expect(toBearing({ x: 420, y: 0 }, O)).toEqual({ direction: COMPASS_LABELS.indexOf('E'), distance: 420 })
+    expect(toBearing({ x: 0, y: 420 }, O)).toEqual({ direction: COMPASS_LABELS.indexOf('S'), distance: 420 })
+    expect(toBearing({ x: -420, y: 0 }, O)).toEqual({ direction: COMPASS_LABELS.indexOf('W'), distance: 420 })
   })
 
-  it('rounds to the nearest of the 16 points and the nearest millimetre', () => {
-    // 10° west of north is nearer N (0°) than NNW (337.5°).
-    const tenDeg = (10 * Math.PI) / 180
-    expect(toBearing({ x: -Math.sin(tenDeg) * 300, y: -Math.cos(tenDeg) * 300 }, O)).toEqual({
-      direction: COMPASS_16.indexOf('N'), distance: 300,
+  it('rounds to the nearest of the 32 points and the nearest millimetre', () => {
+    // 5° west of north is nearer N (0°) than NbW (11.25° off).
+    const five = (5 * Math.PI) / 180
+    expect(toBearing({ x: -Math.sin(five) * 300, y: -Math.cos(five) * 300 }, O)).toEqual({
+      direction: COMPASS_LABELS.indexOf('N'), distance: 300,
     })
-    // 15° west of north is nearer NNW (22.5° off) than N.
-    const fifteen = (15 * Math.PI) / 180
-    expect(toBearing({ x: -Math.sin(fifteen) * 300, y: -Math.cos(fifteen) * 300 }, O).direction)
-      .toBe(COMPASS_16.indexOf('NNW'))
+    // 8° west of north is nearer NbW than N — a point the 16-point rose had no name for.
+    const eight = (8 * Math.PI) / 180
+    expect(toBearing({ x: -Math.sin(eight) * 300, y: -Math.cos(eight) * 300 }, O).direction)
+      .toBe(COMPASS_LABELS.indexOf('NbW'))
     expect(toBearing({ x: 100.4, y: 0 }, O).distance).toBe(100)
   })
 
   it('measures from the origin given, not from the world origin', () => {
     expect(toBearing({ x: 500, y: 100 }, { x: 200, y: 100 })).toEqual({
-      direction: COMPASS_16.indexOf('E'), distance: 300,
+      direction: COMPASS_LABELS.indexOf('E'), distance: 300,
     })
   })
 
@@ -94,19 +95,19 @@ describe('toBearing', () => {
 
 describe('fromBearing', () => {
   it('lays a bearing back out in the world frame', () => {
-    const e = fromBearing({ direction: COMPASS_16.indexOf('E'), distance: 100 }, O)
+    const e = fromBearing({ direction: COMPASS_LABELS.indexOf('E'), distance: 100 }, O)
     // `+ 0` normalises -0, which deep equality distinguishes.
     expect(Math.round(e.x) + 0).toBe(100)
     expect(Math.round(e.y) + 0).toBe(0)
-    const nnw = fromBearing({ direction: COMPASS_16.indexOf('NNW'), distance: 100 }, { x: 10, y: 10 })
-    expect(nnw.x).toBeLessThan(10)
-    expect(nnw.y).toBeLessThan(10)
-    expect(Math.hypot(nnw.x - 10, nnw.y - 10)).toBeCloseTo(100)
+    const nwbn = fromBearing({ direction: COMPASS_LABELS.indexOf('NWbN'), distance: 100 }, { x: 10, y: 10 })
+    expect(nwbn.x).toBeLessThan(10)
+    expect(nwbn.y).toBeLessThan(10)
+    expect(Math.hypot(nwbn.x - 10, nwbn.y - 10)).toBeCloseTo(100)
   })
 
   it('round-trips with toBearing on every point of the rose', () => {
     const origin = { x: -410, y: 96 }
-    for (let direction = 0; direction < COMPASS_16.length; direction++) {
+    for (let direction = 0; direction < BEARING_POINTS; direction++) {
       const bearing = { direction, distance: 275 }
       expect(toBearing(fromBearing(bearing, origin), origin)).toEqual(bearing)
     }
@@ -115,7 +116,7 @@ describe('fromBearing', () => {
 
 describe('formatBearing', () => {
   it('reads as a distance and a rose point, and the origin as origin', () => {
-    expect(formatBearing({ direction: COMPASS_16.indexOf('NNW'), distance: 420 })).toBe('420 mm NNW')
+    expect(formatBearing({ direction: COMPASS_LABELS.indexOf('NEbN'), distance: 840 })).toBe('840 mm NEbN')
     expect(formatBearing({ direction: 3, distance: 0 })).toBe('origin')
     expect(formatBearing({ direction: 3, distance: 0.4 })).toBe('origin')
   })
@@ -148,8 +149,8 @@ describe('origin', () => {
 
     const before = makeGame({ originId: 'u1', units: [anchor, other], terrain: [terrain] })
     expect(formatBearing(toBearing(unitReferencePoint(other), originPoint(before)))).toBe('320 mm N')
-    // 300 east and 200 north is 56° off north: nearer ENE (56.25°) than NE.
-    expect(formatBearing(toBearing(terrain.center, originPoint(before)))).toBe('361 mm ENE')
+    // 300 east and 200 north is 56.3° off north: nearer NEbE (56.25°) than ENE.
+    expect(formatBearing(toBearing(terrain.center, originPoint(before)))).toBe('361 mm NEbE')
 
     // The anchor is re-entered 320mm further north; the consort now lies on her.
     const after = makeGame({ originId: 'u1', units: [{ ...anchor, position: { x: 0, y: -320 } }, other] })

@@ -1,8 +1,8 @@
-import { COMPASS_16 } from '../utils/coordinates'
+import { COMPASS_LABELS } from '../utils/attitude'
 import type { Bearing } from '../utils/coordinates'
 import { Select } from './Select'
 
-const DIRECTION_OPTIONS = COMPASS_16.map((label, value) => ({ value: String(value), label }))
+const DIRECTION_OPTIONS = COMPASS_LABELS.map((label, value) => ({ value: String(value), label }))
 
 interface BearingInputProps {
   value: Bearing
@@ -12,8 +12,8 @@ interface BearingInputProps {
 
 /**
  * Enter a position the way it is read across the table: so many millimetres
- * in such a direction from the origin ship. The rose is the 16-point one —
- * a bearing eyeballed across a table is not accurate to a degree.
+ * in such a direction from the origin ship, on the same 32-point rose as
+ * headings and the wind.
  */
 export function BearingInput({ value, onChange, disabled }: BearingInputProps) {
   return (

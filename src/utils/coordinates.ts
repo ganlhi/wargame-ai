@@ -1,4 +1,5 @@
 import type { GameState, TableTerrain, Unit } from '../types'
+import { COMPASS_LABELS } from './attitude'
 import type { Point } from './geometry'
 
 /**
@@ -15,21 +16,15 @@ import type { Point } from './geometry'
  */
 
 /**
- * The 16 points of the compass rose, clockwise from north. Positions are read
- * on this coarser rose rather than the 32-point one headings use: a bearing
- * eyeballed across a table is not accurate to a degree, and NNW is what a
- * player says.
+ * Positions are read on the same 32-point rose as headings and the wind — the
+ * rose the rules are written in — so a player says `840 mm NEbN` with the one
+ * set of points they use everywhere else at the table.
  */
-export const COMPASS_16 = [
-  'N', 'NNE', 'NE', 'ENE', 'E', 'ESE', 'SE', 'SSE',
-  'S', 'SSW', 'SW', 'WSW', 'W', 'WNW', 'NW', 'NNW',
-] as const
-
-export const BEARING_POINTS = COMPASS_16.length
+export const BEARING_POINTS = COMPASS_LABELS.length
 
 /** A position relative to the origin ship: which way and how far. */
 export interface Bearing {
-  /** Index into {@link COMPASS_16}: 0 = N, 4 = E, 8 = S, 12 = W. */
+  /** Index into {@link COMPASS_LABELS}: 0 = N, 8 = E, 16 = S, 24 = W. */
   direction: number
   /** Distance in mm; 0 is the origin itself. */
   distance: number
@@ -81,7 +76,7 @@ export function originName(game: Pick<GameState, 'originId' | 'units'>): string 
 }
 
 /**
- * The bearing of a world point from `origin`: the nearest of the 16 points,
+ * The bearing of a world point from `origin`: the nearest of the 32 points,
  * and the distance to the nearest millimetre. A point on the origin has no
  * direction to speak of and reads north at 0 mm.
  */
@@ -106,10 +101,10 @@ export function fromBearing(bearing: Bearing, origin: Point): Point {
   }
 }
 
-/** Human-readable bearing, e.g. `420 mm NNW`; the origin itself reads `origin`. */
+/** Human-readable bearing, e.g. `840 mm NEbN`; the origin itself reads `origin`. */
 export function formatBearing(bearing: Bearing): string {
   if (Math.round(bearing.distance) === 0) return 'origin'
-  return `${Math.round(bearing.distance)} mm ${COMPASS_16[bearing.direction]}`
+  return `${Math.round(bearing.distance)} mm ${COMPASS_LABELS[bearing.direction]}`
 }
 
 /** Convenience: a world point as a bearing from the game's origin ship. */
