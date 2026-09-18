@@ -14,9 +14,10 @@ import {
 import {
   clearStoredToken,
   getAccessToken,
-  hasValidToken,
   preloadGoogleIdentity,
+  renewAccessTokenSilently,
   revokeToken,
+  startTokenRenewal,
 } from './googleAuth'
 
 /**
@@ -37,8 +38,8 @@ export class NeedsSignInError extends Error {
 }
 
 /**
- * Background work can only use a token that is already in hand: a popup can
- * be opened from a click, not from a save that is running after one.
+ * Background work uses the token in hand, or one Google renews silently; what
+ * it cannot do is open a popup, which the browser allows only inside a click.
  */
 const nonInteractiveToken = async (): Promise<string> => {
   const token = await getAccessToken(effectiveClientId(), { interactive: false })
@@ -88,11 +89,23 @@ function run<T>(
 ): Promise<T | undefined> {
   const { folder } = useDriveSyncStore.getState()
   if (!folder || !effectiveClientId()) return Promise.resolve(undefined)
+  const once = () =>
+    job(new DriveSyncer(createDriveClient(nonInteractiveToken), folder.id, storeCache))
   const task = queue.then(async () => {
     useDriveSyncStore.getState().setStatus({ kind: 'syncing', what })
     try {
-      const syncer = new DriveSyncer(createDriveClient(nonInteractiveToken), folder.id, storeCache)
-      const result = await job(syncer)
+      let result: T
+      try {
+        result = await once()
+      } catch (e) {
+        // Drive refusing the token is not the end of the sync: Google will
+        // usually hand over another without troubling the user, and the work
+        // is worth doing again on it rather than dropping to a sign-in prompt.
+        if (!(e instanceof DriveApiError && e.status === 401)) throw e
+        clearStoredToken()
+        if (!(await renewAccessTokenSilently(effectiveClientId()))) throw e
+        result = await once()
+      }
       useDriveSyncStore.getState().setStatus({ kind: 'ok', at: new Date().toISOString() })
       return result
     } catch (e) {
@@ -192,6 +205,32 @@ export async function signIn(): Promise<void> {
   await getAccessToken(clientId, { interactive: true })
   const store = useDriveSyncStore.getState()
   if (store.status.kind === 'signin') store.setStatus({ kind: 'idle' })
+  keepSignedIn()
+}
+
+let stopRenewal: (() => void) | null = null
+
+/**
+ * Have the token renew itself in the background for as long as the app is
+ * open, so an hour at the table does not end in a sign-in. A renewal that
+ * comes through after a lapse takes the prompt down and pushes the game that
+ * could not be saved while the token was gone.
+ */
+function keepSignedIn(): void {
+  stopRenewal?.()
+  stopRenewal = startTokenRenewal(effectiveClientId(), (token) => {
+    const store = useDriveSyncStore.getState()
+    if (token) {
+      if (store.status.kind === 'signin') {
+        store.setStatus({ kind: 'idle' })
+        pushCurrentGame()
+      }
+      return
+    }
+    // Only the user can get past this one now; say so, unless a sync is
+    // mid-flight and about to report something more specific.
+    if (isSyncConfigured() && store.status.kind !== 'syncing') store.setStatus({ kind: 'signin' })
+  })
 }
 
 export type ConnectResult = 'pulled' | 'seeded'
@@ -219,6 +258,8 @@ export function connectFolder(folder: DriveFolder): Promise<ConnectResult | unde
 
 /** Stop syncing and sign out. Local games and the files on Drive are both left as they are. */
 export function disconnect(): void {
+  stopRenewal?.()
+  stopRenewal = null
   revokeToken()
   useDriveSyncStore.getState().reset()
 }
@@ -226,17 +267,24 @@ export function disconnect(): void {
 let started = false
 
 /**
- * On app load, take the games from Drive. Without a usable token the app can
- * only ask for a click, so it flags that and waits.
+ * On app load, take the games from Drive. The token from the last session has
+ * usually lapsed by now, so the app renews it silently first; only when Google
+ * will not do that without the user does it ask for a click.
  */
 export function startupSync(): void {
   if (started) return
   started = true
   if (!isSyncConfigured()) return
   void preloadGoogleIdentity().catch(() => {})
-  if (!hasValidToken(effectiveClientId())) {
-    useDriveSyncStore.getState().setStatus({ kind: 'signin' })
-    return
-  }
-  void pullFromDrive()
+  // The renewal loop starts first so its opening attempt and this one are the
+  // same request to Google rather than two.
+  keepSignedIn()
+  void (async () => {
+    const token = await getAccessToken(effectiveClientId(), { interactive: false })
+    if (!token) {
+      useDriveSyncStore.getState().setStatus({ kind: 'signin' })
+      return
+    }
+    void pullFromDrive()
+  })()
 }

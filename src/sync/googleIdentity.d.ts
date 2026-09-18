@@ -30,6 +30,8 @@ declare namespace google.accounts.oauth2 {
   interface TokenClientConfig {
     client_id: string
     scope: string
+    /** The account to go to, as an email address: what lets a renewal skip the chooser. */
+    login_hint?: string
     callback: (response: TokenResponse) => void
     error_callback?: (error: ClientConfigError) => void
   }

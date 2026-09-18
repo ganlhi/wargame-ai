@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useGameStore } from '../stores/gameStore'
 import { ROOT_FOLDER, type DriveFolder } from '../sync/driveClient'
 import { envClientId, useDriveSyncStore } from '../sync/syncStore'
-import { hasValidToken, preloadGoogleIdentity } from '../sync/googleAuth'
+import { hasValidToken, preloadGoogleIdentity, renewAccessTokenSilently } from '../sync/googleAuth'
 import {
   NeedsSignInError,
   browseClient,
@@ -51,10 +51,25 @@ export function DriveSyncModal({ onClose }: DriveSyncModalProps) {
 
   // Have the Google script in hand before the sign-in click, so the popup
   // opens inside the click rather than after a download the browser may not
-  // count as part of it.
+  // count as part of it. With it loaded, a lapsed token is worth a silent
+  // renewal before the user is shown a sign-in button they need not press.
+  // Only the client ID the dialog opened with: one being typed in is a partial
+  // one for most of its keystrokes, and not worth a request each.
+  const [openedWith] = useState(clientId)
   useEffect(() => {
-    void preloadGoogleIdentity().catch(() => {})
-  }, [])
+    let cancelled = false
+    void preloadGoogleIdentity()
+      .then(() =>
+        openedWith && !hasValidToken(openedWith) ? renewAccessTokenSilently(openedWith) : null,
+      )
+      .then((token) => {
+        if (token && !cancelled) setSignedIn(true)
+      })
+      .catch(() => {})
+    return () => {
+      cancelled = true
+    }
+  }, [openedWith])
 
   useEffect(() => {
     if (!signedIn) return
