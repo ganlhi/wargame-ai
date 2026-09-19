@@ -172,12 +172,14 @@ function tackTargetSide(direction: 'port' | 'starboard'): 'port' | 'starboard' {
 /**
  * Whether a ship may declare a tack. The procedure is only open to a ship that
  * spent the whole of the previous turn beating — beating as the turn started
- * and still beating as it ended.
+ * and still beating as it ended — and to one that still answers her helm.
  */
 export function canTack(unit: Unit, prevAttitude: Attitude | null): boolean {
   return (
     unit.status === 'active' &&
     !unit.isInIrons &&
+    // A wheel shot away or a jammed rudder closes the procedure outright.
+    !unit.tackingForbidden &&
     // A ship that cannot turn at all can never come through the wind.
     unit.maxTurnPoints > 0 &&
     unit.attitude === 'beating' &&
@@ -343,8 +345,10 @@ export function applyMovementPlan(
     // A ship that ends up in irons without declaring a tack — dragged round, or
     // an order built before the rule applied — is put into the procedure, so it
     // always has a defined way out rather than sitting head to wind for ever.
+    // One that cannot come about at all has no way out to be given: she lies
+    // head to wind and drifts, and the player gets her round at the table.
     isInIrons = true
-    tackDirection = tackTurnDirection(orientation, windAngle)
+    tackDirection = unit.tackingForbidden ? null : tackTurnDirection(orientation, windAngle)
   }
 
   return {
@@ -428,9 +432,13 @@ export function enumerateMovementPlans(
   const { maxTurnPoints } = unit
 
   // Mid-tack there is nothing to decide: the ship must keep swinging the same
-  // way, under no sail, until it comes onto the new tack.
+  // way, under no sail, until it comes onto the new tack. A ship that may not
+  // tack at all has even less to decide — head to wind she carries no way and
+  // no helm, so she lies there and drifts.
   if (unit.isInIrons) {
-    return [buildTackPlan(unit, windAngle)]
+    return unit.tackingForbidden
+      ? [buildPlan([0, 0, 0, 0, 0], [], 0, 0)]
+      : [buildTackPlan(unit, windAngle)]
   }
 
   const maxSpeed = topSpeed(

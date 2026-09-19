@@ -85,12 +85,14 @@ function withOrdersDiscarded(game: GameState): GameState {
  * player has just entered. Head to wind she is in the procedure: swinging the
  * way she was already swinging, or, if the app has no record of that, toward
  * the bow the wind is on. Off the wind she is out of it, whatever the AI
- * expected — the table is the truth.
+ * expected — the table is the truth. A ship that may not tack is never in the
+ * procedure at all: head to wind she simply drifts.
  */
 function withTackState(unit: Unit, windDirection: number): Unit {
-  const tackDirection = unit.isInIrons
-    ? unit.tackDirection ?? tackTurnDirection(unit.orientation, windDirection)
-    : null
+  const tackDirection =
+    unit.isInIrons && !unit.tackingForbidden
+      ? unit.tackDirection ?? tackTurnDirection(unit.orientation, windDirection)
+      : null
   return tackDirection === unit.tackDirection ? unit : { ...unit, tackDirection }
 }
 

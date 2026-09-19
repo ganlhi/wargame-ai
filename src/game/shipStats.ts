@@ -41,6 +41,16 @@ export function resolveArcs(arcs: FiringArc[], scale: Scale): FiringArc[] {
   }))
 }
 
+/**
+ * A hand-entered turning limit, or null for "as charted". Anything that is not
+ * a whole number of points from none at all upward is no limit at all.
+ */
+export function normaliseTurnPointsOverride(value: unknown): number | null {
+  if (value === null || value === undefined || value === '') return null
+  const points = Math.round(Number(value))
+  return Number.isFinite(points) && points >= 0 ? points : null
+}
+
 function sameStats(unit: Unit, stats: ReturnType<typeof shipStats>): boolean {
   if (unit.maxTurnPoints !== stats.maxTurnPoints || unit.driftSpeed !== stats.driftSpeed) return false
   const attitudes = Object.keys(stats.speedProfile) as Attitude[]
@@ -66,22 +76,30 @@ function sameRanges(unit: Unit, scale: Scale): boolean {
  * by hand, so running this over a unit whenever she or the conditions change
  * is what keeps them true. It hands back the very same object when they
  * already are, so a re-rate that changes nothing costs nothing downstream.
+ *
+ * The one figure the charts do not have the last word on is her turning: a
+ * ship whose steering has suffered carries a `turnPointsOverride`, which is a
+ * setting and survives the re-rate.
  */
 export function resolveUnit(unit: Unit, conditions: Conditions): Unit {
-  const stats = shipStats(unit.shipType, conditions)
+  const charted = shipStats(unit.shipType, conditions)
+  const override = normaliseTurnPointsOverride(unit.turnPointsOverride)
+  const stats = override === null ? charted : { ...charted, maxTurnPoints: override }
   const attitude = computeAttitude(conditions.windDirection, unit.orientation, unit.foreAndAftRigged)
   const isInIrons = attitude === 'in_irons'
   if (
     sameStats(unit, stats) &&
     sameRanges(unit, conditions.scale) &&
     unit.attitude === attitude &&
-    unit.isInIrons === isInIrons
+    unit.isInIrons === isInIrons &&
+    unit.turnPointsOverride === override
   ) {
     return unit
   }
   return {
     ...unit,
     ...stats,
+    turnPointsOverride: override,
     firingArcs: resolveArcs(unit.firingArcs, conditions.scale),
     attitude,
     isInIrons,

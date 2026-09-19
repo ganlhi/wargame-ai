@@ -33,6 +33,8 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     tackDirection: null,
     prevAttitude: 'reaching',
     prevMoveDistance: null,
+    turnPointsOverride: null,
+    tackingForbidden: false,
     aiOrder: null,
     ...overrides,
   }
@@ -96,6 +98,23 @@ describe('resolveUnit', () => {
   it('hands back the very same ship when nothing needs changing', () => {
     const unit = makeUnit()
     expect(resolveUnit(unit, CONDITIONS)).toBe(unit)
+  })
+
+  // Her turning is the one charted figure a player may overrule, for damage
+  // the charts know nothing about — so it has to survive the re-rate that
+  // throws every other cached figure away.
+  it('keeps a turning limit entered for a ship whose steering has suffered', () => {
+    const crippled = resolveUnit(makeUnit({ turnPointsOverride: 1 }), CONDITIONS)
+    expect(crippled.maxTurnPoints).toBe(1)
+    expect(crippled.turnPointsOverride).toBe(1)
+    // Everything else is still read straight off the charts.
+    expect(crippled.driftSpeed).toBe(driftSpeed('rate_3', 'moderate_breeze', '1/1200'))
+    // Including none at all: a ship that cannot turn is not a ship with no limit.
+    expect(resolveUnit(makeUnit({ turnPointsOverride: 0 }), CONDITIONS).maxTurnPoints).toBe(0)
+    // And a limit lifted goes back to the chart.
+    expect(resolveUnit(makeUnit({ turnPointsOverride: null }), CONDITIONS).maxTurnPoints).toBe(
+      turnPoints('rate_3'),
+    )
   })
 
   it('reads her attitude off her heading and the wind, head to wind included', () => {

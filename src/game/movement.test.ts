@@ -53,6 +53,8 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     tackDirection: null,
     prevAttitude: 'reaching',
     prevMoveDistance: 0,
+    turnPointsOverride: null,
+    tackingForbidden: false,
     aiOrder: null,
     ...overrides,
   }
@@ -516,6 +518,40 @@ describe('tacking procedure', () => {
         if (plan.isTack) continue
         expect(applyMovementPlan(unit, plan, 0).attitude).not.toBe('in_irons')
       }
+    })
+  })
+
+  // A wheel shot away or a jammed rudder closes the procedure outright: she
+  // never comes about, and head to wind there is no way out to give her.
+  describe('a ship that may not tack', () => {
+    it('is refused the procedure however well she has been beating', () => {
+      expect(canTack(beating({ tackingForbidden: true }), 'beating')).toBe(false)
+      expect(
+        enumerateMovementPlans(beating({ tackingForbidden: true }), 0, 'beating').some((p) => p.isTack),
+      ).toBe(false)
+    })
+
+    it('lies head to wind and drifts, rather than being put into the procedure', () => {
+      const unit = makeUnit({
+        orientation: 0,
+        isInIrons: true,
+        tackingForbidden: true,
+        maxTurnPoints: 6,
+        driftSpeed: 50,
+        position: { x: 0, y: 0 },
+      })
+      const plans = enumerateMovementPlans(unit, 0, 'beating')
+      expect(plans).toHaveLength(1)
+      expect(plans[0].isTack).toBeFalsy()
+      expect(plans[0].totalTurnPoints).toBe(0)
+      expect(plans[0].chunks.every((c) => !c.turn)).toBe(true)
+
+      const result = applyMovementPlan(unit, plans[0], 0)
+      // Wind from the north, so she is carried south and holds her heading.
+      expect(result.position).toEqual({ x: 0, y: 50 })
+      expect(result.orientation).toBe(0)
+      expect(result.isInIrons).toBe(true)
+      expect(result.tackDirection).toBeNull()
     })
   })
 })

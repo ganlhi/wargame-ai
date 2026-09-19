@@ -2,6 +2,7 @@ import { useRef, useEffect, useCallback, useState } from 'react'
 import { Application, Graphics, Container } from 'pixi.js'
 import { useGameStore } from '../stores/gameStore'
 import { Select } from './Select'
+import { MoveShipModal } from './MoveShipModal'
 import { TERRAIN_COLORS, TERRAIN_TYPE_OPTIONS } from '../utils/terrainStyles'
 import type { AIStyle, GameState, TerrainType, UnitStatus } from '../types'
 import { ATTITUDE_LABELS, COMPASS_LABELS, windTowardPoint } from '../utils/attitude'
@@ -85,6 +86,12 @@ export function GameCanvas({
    * she is, so there is nothing to read the tap against.
    */
   const [relocating, setRelocating] = useState<{ kind: 'unit' | 'terrain'; id: string } | null>(null)
+  /**
+   * The ship whose Move dialog is open. Bringing the table up to date is
+   * typing rather than pointing on a tablet, so Move asks for her heading and
+   * her bearing outright; tapping the water is still offered from inside it.
+   */
+  const [movingUnitId, setMovingUnitId] = useState<string | null>(null)
   // null = follow the content automatically; set = the player has taken manual
   // control of the view by panning or zooming, until they hit Fit.
   const [view, setView] = useState<Viewport | null>(null)
@@ -723,6 +730,9 @@ export function GameCanvas({
   const selectedUnit = selectedUnitId
     ? currentGame?.units.find((u) => u.id === selectedUnitId)
     : undefined
+  const movingUnit = movingUnitId
+    ? currentGame?.units.find((u) => u.id === movingUnitId)
+    : undefined
   const lastShipWithTerrain =
     (currentGame?.units.length ?? 0) === 1 && (currentGame?.terrain.length ?? 0) > 0
   const relocatingName = relocating
@@ -921,23 +931,27 @@ export function GameCanvas({
             )}
           </div>
 
-          {currentGame?.originId !== selectedUnit.id && (
-            <div className="flex gap-2 mb-2">
-              <button
-                onClick={() => setRelocating({ kind: 'unit', id: selectedUnit.id })}
-                title="Tap the water where she now lies; the tap is read as a bearing from the origin ship"
-                className="flex-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
-              >
-                Move
-              </button>
+          <div className="flex gap-2 mb-2">
+            <button
+              onClick={() => setMovingUnitId(selectedUnit.id)}
+              title={
+                currentGame?.originId === selectedUnit.id
+                  ? 'Enter her heading; she reads origin wherever she lies'
+                  : 'Enter her heading and her bearing from the origin ship'
+              }
+              className="flex-1 text-xs text-blue-400 hover:text-blue-300 border border-blue-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
+            >
+              Move
+            </button>
+            {currentGame?.originId !== selectedUnit.id && (
               <button
                 onClick={() => setOrigin(selectedUnit.id)}
                 className="flex-1 text-xs text-sky-400 hover:text-sky-300 border border-sky-800 rounded px-2 py-1.5 transition-colors cursor-pointer"
               >
                 Set as origin
               </button>
-            </div>
-          )}
+            )}
+          </div>
 
           <div className="flex gap-2">
             <button
@@ -961,6 +975,23 @@ export function GameCanvas({
             </button>
           </div>
         </div>
+      )}
+
+      {movingUnit && (
+        <MoveShipModal
+          unit={movingUnit}
+          onClose={() => setMovingUnitId(null)}
+          // The origin ship reads origin wherever she lies, so there is nothing
+          // to read a tap against; everyone else may still be placed by hand.
+          onTapTheWater={
+            currentGame?.originId === movingUnit.id
+              ? undefined
+              : () => {
+                  setMovingUnitId(null)
+                  setRelocating({ kind: 'unit', id: movingUnit.id })
+                }
+          }
+        />
       )}
 
       {pointerPlacing && placementCursorPos && (

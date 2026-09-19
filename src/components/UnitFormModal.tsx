@@ -4,10 +4,10 @@ import { useGameStore } from '../stores/gameStore'
 import { useShipTemplateStore } from '../stores/shipTemplateStore'
 import { deleteShipTemplate, saveShipTemplate } from '../sync/syncActions'
 import { computeAttitude, ATTITUDE_LABELS, COMPASS_LABELS } from '../utils/attitude'
-import type { Unit, UnitSide, AIStyle, UnitStatus, ShipSettings, ShipTemplate } from '../types'
+import type { Unit, UnitSide, AIStyle, UnitStatus, ShipSettings, ShipTemplate, ShipType } from '../types'
 import { cloneShipSettings, findTemplateByName } from '../utils/shipTemplates'
-import { REFERENCE_SCALE } from '../data/binder'
-import { conditionsOf, shipStats } from '../game/shipStats'
+import { REFERENCE_SCALE, SHIP_TYPE_INFO } from '../data/binder'
+import { conditionsOf, normaliseTurnPointsOverride, shipStats } from '../game/shipStats'
 import { BearingInput } from './BearingInput'
 import { Select } from './Select'
 import { GunsFields, ShipSettingsFields } from './ShipSettingsFields'
@@ -63,6 +63,110 @@ function OrientationSlider({
       <p className="text-xs text-gray-500 mt-1">
         Attitude: <span className="text-gray-300">{ATTITUDE_LABELS[attitude]}</span>
       </p>
+    </div>
+  )
+}
+
+/**
+ * What has become of her steering — damage the charts know nothing about, so
+ * it belongs to this game rather than to her class and is never saved with
+ * her settings.
+ *
+ * Her turning is the movement chart's figure for her type until something
+ * carries away; from then on it is whatever is entered here. Forbidding the
+ * tack is the harder case of the same thing: a ship that cannot be brought
+ * through the wind is never given the procedure, and one left head to wind
+ * lies there and drifts until the player gets her round at the table.
+ */
+function SteeringFields({
+  shipType,
+  turnPointsOverride,
+  tackingForbidden,
+  onTurnPointsOverrideChange,
+  onTackingForbiddenChange,
+}: {
+  shipType: ShipType
+  turnPointsOverride: number | null
+  tackingForbidden: boolean
+  onTurnPointsOverrideChange: (points: number | null) => void
+  onTackingForbiddenChange: (forbidden: boolean) => void
+}) {
+  const charted = SHIP_TYPE_INFO[shipType].turnPoints
+  const points = turnPointsOverride ?? charted
+
+  return (
+    <div className="bg-gray-800/50 rounded-lg p-3 border border-gray-700/50 space-y-3">
+      <div className="text-xs text-gray-400 font-medium">Steering</div>
+
+      <div>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <label className="text-xs text-gray-400">Turn points</label>
+          {turnPointsOverride !== null && (
+            <button
+              type="button"
+              onClick={() => onTurnPointsOverrideChange(null)}
+              className="text-xs text-blue-400 hover:text-blue-300 cursor-pointer"
+            >
+              Back to the chart
+            </button>
+          )}
+        </div>
+        <input
+          type="number"
+          min={0}
+          max={32}
+          step={1}
+          value={points}
+          aria-label="Turn points"
+          onChange={(e) =>
+            onTurnPointsOverrideChange(
+              normaliseTurnPointsOverride(Math.min(32, Math.max(0, Number(e.target.value)))),
+            )
+          }
+          className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1.5 text-xs text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-500"
+        />
+        <p className="text-xs text-gray-500 mt-1">
+          {turnPointsOverride === null ? (
+            <>
+              The chart gives her <span className="text-gray-300">{charted}</span>. Lower it for a
+              ship whose wheel or rudder has suffered.
+            </>
+          ) : (
+            <>
+              Entered for this game, in place of the chart's{' '}
+              <span className="text-gray-300">{charted}</span>. None at all and she holds her
+              heading whatever else she does.
+            </>
+          )}
+        </p>
+      </div>
+
+      <div>
+        <label className="block text-xs text-gray-400 mb-1.5">Coming about</label>
+        <div className="flex gap-2">
+          {([false, true] as const).map((forbidden) => (
+            <button
+              key={String(forbidden)}
+              type="button"
+              onClick={() => onTackingForbiddenChange(forbidden)}
+              className={`flex-1 px-3 py-2 rounded-lg text-sm font-medium transition-colors cursor-pointer ${
+                tackingForbidden === forbidden
+                  ? forbidden
+                    ? 'bg-red-600 text-white'
+                    : 'bg-blue-600 text-white'
+                  : 'bg-gray-800 text-gray-400 border border-gray-700'
+              }`}
+            >
+              {forbidden ? 'May not tack' : 'May tack'}
+            </button>
+          ))}
+        </div>
+        <p className="text-xs text-gray-500 mt-1">
+          {tackingForbidden
+            ? 'She cannot be brought through the wind — rudder or wheel gone. The AI never declares a tack for her, and head to wind she simply drifts.'
+            : 'She may declare a tack after a whole turn spent beating, as the rules allow.'}
+        </p>
+      </div>
     </div>
   )
 }
@@ -242,6 +346,13 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
   const [orientation, setOrientation] = useState(unit?.orientation ?? 0)
   const [status, setStatus] = useState<UnitStatus>(unit?.status ?? 'active')
   const [aiStyle, setAiStyle] = useState<AIStyle>(unit?.aiStyle ?? 'cautious')
+  // Damage to her steering, which belongs to this game rather than to her
+  // class: a turning limit the charts know nothing about, and a helm too far
+  // gone to bring her through the wind at all.
+  const [turnPointsOverride, setTurnPointsOverride] = useState<number | null>(
+    unit?.turnPointsOverride ?? null,
+  )
+  const [tackingForbidden, setTackingForbidden] = useState(unit?.tackingForbidden ?? false)
   // Everything that is the ship's own — what a saved ship holds — in one draft.
   const [draft, setDraft] = useState(() => draftFromSettings(unit, conditions.scale))
 
@@ -281,6 +392,7 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       isFirstShip ? { x: 0, y: 0 }
       : isOrigin && unit ? unit.position
       : fromBearing(bearing, origin)
+    const charted = shipStats(currentSettings.shipType, conditions)
     onSave({
       id: unit?.id ?? uuid(),
       name: name.trim(),
@@ -291,8 +403,12 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
       aiStyle: side === 'ai' ? aiStyle : 'cautious',
       ...currentSettings,
       // Speeds, drift and turning are the charts', read off her type against
-      // this game's scale and weather rather than entered anywhere.
-      ...shipStats(currentSettings.shipType, conditions),
+      // this game's scale and weather rather than entered anywhere — bar a
+      // turning limit entered for a ship whose steering has been shot up.
+      ...charted,
+      turnPointsOverride,
+      maxTurnPoints: turnPointsOverride ?? charted.maxTurnPoints,
+      tackingForbidden,
       attitude: computedAttitude,
       isInIrons: computedAttitude === 'in_irons',
       // What the AI remembers of its own last order is not the form's to edit.
@@ -385,6 +501,14 @@ export function UnitFormModal({ unit, defaultPosition, onSave, onClose }: UnitFo
               ]}
             />
           </div>
+
+          <SteeringFields
+            shipType={draft.shipType}
+            turnPointsOverride={turnPointsOverride}
+            tackingForbidden={tackingForbidden}
+            onTurnPointsOverrideChange={setTurnPointsOverride}
+            onTackingForbiddenChange={setTackingForbidden}
+          />
 
           {side === 'ai' && (
             <div>

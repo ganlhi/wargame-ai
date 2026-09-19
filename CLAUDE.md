@@ -36,7 +36,7 @@ Bearings are converted to and from an internal world frame (millimetres, +x = Ea
 Nothing about how fast a ship sails or how far her guns carry is typed in. Those figures are the rulebook's, transcribed from the binder into `src/data/binder.ts` and read at run time:
 
 - **Sailing speeds and drift** come from the sailing charts, by the ship's **type**, the **wind strength** and the game's **scale**. Several types share a row — a 1st and a 2nd rate sail alike — so a type maps to a chart category rather than being one.
-- **Turning points** come from the movement chart, by ship type alone. A 1st rate turns 3 points a turn where a cutter turns 10, which is what separates types the sailing charts rate together.
+- **Turning points** come from the movement chart, by ship type alone. A 1st rate turns 3 points a turn where a cutter turns 10, which is what separates types the sailing charts rate together. This is the one charted figure a player may overrule, since a wheel shot away is damage no chart knows about — see *Steering damage* below.
 - **Gun ranges** come from the range charts, by the **gun type** and the game's scale.
 
 The charts are printed in two units and held in one: ranges are given in centimetres and stored as millimetres; speeds are already millimetres for a whole game turn.
@@ -59,7 +59,15 @@ So a ship is described by what she *is*, and everything that follows is looked u
     - her **gun layout**: per arc (bow, stern, port, starboard), a list of gun types out of the charts and how many of each. **Every ship carries one, player ships included**: the AI judges how dangerous a player ship is, and how far to keep from her, by her guns, so leaving them off would leave it guessing. Where a ship genuinely has no guns entered, the AI falls back on its own ranges.
     - for an AI ship, her **style**: aggressive, cautious or defensive (see below).
     - her **status**: active, immobilised (may not move — a ship grappled at the table is marked so), destroyed or surrendered (may do nothing).
+    - her **steering damage** (see below).
 - **Terrain** pieces are simplified primitives rather than traced outlines: a shape (circle, ellipse or rectangle), its size (diameter, or width E–W and length N–S), its rotation for ellipses and rectangles, and the bearing of its centre from the origin ship.
+
+### Steering damage
+
+A wheel shot away, a rudder jammed, a tiller carried off: damage the charts know nothing about, resolved at the table and entered on the ship like her status. Two things are entered, both belonging to the game rather than to her class, so neither is kept in a saved ship:
+
+- her **turn points**, which start as the movement chart's figure for her type and can be set to anything from that down to none at all. Whatever is entered stands through every re-rate, where the charted figure would otherwise be read straight back; clearing it hands her back to the chart. None at all and she holds her heading whatever else she does.
+- whether she **may tack**. A ship whose helm is gone cannot be brought through the wind, so the procedure is closed to her outright: the AI never declares a tack for her, and one left head to wind is not put into the procedure but simply lies there and drifts until the player gets her round at the table.
 
 ### Saved ships
 
@@ -121,13 +129,13 @@ For most ships, the best to worst attitudes are as follows: quarter reaching, ru
 
 A beating ship that turns further into the wind — even by one point — goes into irons. It may do that, but only by declaring a **tack**, which commits it to a fixed procedure:
 
-- **Eligibility.** A tack may only be declared if the previous turn was spent *entirely* beating: beating as that turn began and still beating as it ended.
+- **Eligibility.** A tack may only be declared if the previous turn was spent *entirely* beating: beating as that turn began and still beating as it ended — and only by a ship that still answers her helm.
 - **Direction.** The ship swings toward whichever bow the wind is on, and **must keep turning that same way** every turn until the tack completes. The direction is remembered rather than re-derived: a ship lying head to wind could have arrived there from either tack, so the geometry alone cannot say which way it should carry on.
 - **No way on.** From the moment the tack is declared — including that first turn, when the ship is technically still beating — it makes no progress under sail. It drifts straight downwind instead, by its drift speed, for as long as the tack lasts.
 - **Completion.** The tack ends the moment the ship is beating again on the *other* side of the wind. It never swings past that point into a reach: the swing each turn is capped at whatever brings it onto the new tack. A tack resolves only at a turn boundary, so a ship that comes round part-way through a turn still drifts out the remainder of it and gathers way again the following turn.
 - **No choice mid-tack.** While the tack is under way, the ship has no other order available.
 
-Because turning up into the wind requires this procedure, an ordinary movement order that would leave a ship in irons is not legal and is never offered. A ship whose entered heading puts her in irons without a tack declared is put into the procedure regardless, so she always has a defined way out.
+Because turning up into the wind requires this procedure, an ordinary movement order that would leave a ship in irons is not legal and is never offered. A ship whose entered heading puts her in irons without a tack declared is put into the procedure regardless, so she always has a defined way out — unless she may not tack at all, where there is no way out to be given her and she drifts.
 
 The player's own ships are never given orders by the app, so tacking only concerns the AI's; the player tacks their ships at the table.
 
@@ -187,7 +195,9 @@ Local storage is the working copy; a Google Drive folder can optionally be its m
 
 ### The map
 
-The battlefield view has no fixed extent to draw: it frames whatever is on the table (ships, their bases, terrain and any revealed tracks), rescaling as the action spreads out or closes up. The player can take over that view at any time — drag empty water to pan, scroll or pinch to zoom, or use the on-screen controls — and a **Fit** button hands it back to following the action automatically. Tapping a ship or a terrain piece opens a small panel with its reading and buttons to edit it, move it, make it the origin, or delete it; a ship's panel also carries a **heading control** — a point to port or starboard at a tap, or a slider — and, for an AI ship, a **style** dropdown, so a heading or a change of temper can be entered without opening the form. A ship can also be placed by tapping the water: the tap is read off as a bearing from the origin ship, rounded to the nearest of the 32 points and the nearest millimetre, and pre-fills the form. **Move** works the same way for anything already on the table — pick the ship or terrain piece, tap the water where it now lies, and it is re-entered at that bearing — which is the quick way to bring the table up to date turn by turn. The origin ship cannot be moved like this: she reads *origin* wherever she is, so there is nothing to read a tap against.
+The battlefield view has no fixed extent to draw: it frames whatever is on the table (ships, their bases, terrain and any revealed tracks), rescaling as the action spreads out or closes up. The player can take over that view at any time — drag empty water to pan, scroll or pinch to zoom, or use the on-screen controls — and a **Fit** button hands it back to following the action automatically. Tapping a ship or a terrain piece opens a small panel with its reading and buttons to edit it, move it, make it the origin, or delete it; a ship's panel also carries a **heading control** — a point to port or starboard at a tap, or a slider — and, for an AI ship, a **style** dropdown, so a heading or a change of temper can be entered without opening the form. A ship can also be placed by tapping the water: the tap is read off as a bearing from the origin ship, rounded to the nearest of the 32 points and the nearest millimetre, and pre-fills the form.
+
+**Move** is the quick way to bring the table up to date turn by turn. On a ship it opens a small dialog holding everything that changes when a model is moved, in one place: her heading, and — unless she is the origin, who reads *origin* wherever she lies — the bearing and distance read across the table to her. Typing is what a tablet has: there is no mouse to drag, the map is a poor ruler, and a heading is a point of the rose rather than something aimed at. Nothing is written until the dialog is accepted. Tapping the water is still offered from inside it, and remains how a terrain piece is moved — pick it, tap the water where it now lies, and it is re-entered at that bearing.
 
 An AI ship's revealed order is drawn as a track from where she is to where the plan leaves her. Her bearing is measured to the base centre, but a model is walked along the table by its stern, so the track follows the **middle of her stern edge** and the marker at its end sits where the stern will be read off. A **solid** track means she is under way; a **dashed** one means she is making no way of her own and going where the wind takes her — in irons, or on a declared tack. Where a chunk ends in a turn the track jogs sideways through the pivot.
 

@@ -31,6 +31,8 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     tackDirection: null,
     prevAttitude: null,
     prevMoveDistance: null,
+    turnPointsOverride: null,
+    tackingForbidden: false,
     aiOrder: null,
     ...overrides,
   }

@@ -7,7 +7,7 @@ import { normaliseSpeedMultiplier, tackTurnDirection } from '../game/movement'
 import {
   DEFAULT_SHIP_TYPE, REFERENCE_SCALE, gunRanges, nearestGunType, nearestShipType,
 } from '../data/binder'
-import { shipStats } from '../game/shipStats'
+import { normaliseTurnPointsOverride, shipStats } from '../game/shipStats'
 import { computeAttitude } from '../utils/attitude'
 
 const UNIT_SIDES: readonly UnitSide[] = ['player', 'ai']
@@ -54,8 +54,12 @@ const ATTITUDES: readonly Attitude[] = ['in_irons', 'beating', 'reaching', 'quar
  *     table, so they are dropped and the save opens at `input`. Positions are
  *     unchanged: `Unit.position` was always the base centre, and terrain's
  *     centre is what a bearing measures to.
+ * 13 — damage the charts know nothing about: `Unit.turnPointsOverride` holds a
+ *     hand-entered turning limit for a ship whose steering has suffered, and
+ *     `Unit.tackingForbidden` closes the tacking procedure to her outright.
+ *     An older save describes a sound ship: no override, tacking allowed.
  */
-export const CURRENT_SCHEMA_VERSION = 12
+export const CURRENT_SCHEMA_VERSION = 13
 
 type RawRecord = Record<string, unknown>
 
@@ -239,6 +243,11 @@ export function migrateSavedGame(raw: RawRecord): GameState {
     const isInIrons = attitude === 'in_irons'
     const prevMoveDistance = Number(u.prevMoveDistance)
     const prevAttitude = u.prevAttitude
+    const charted = shipStats(shipType, { scale, windStrength })
+    // Turning is the charts' figure unless her steering has been shot up, in
+    // which case what was entered for her stands.
+    const turnPointsOverride = normaliseTurnPointsOverride(u.turnPointsOverride)
+    const tackingForbidden = Boolean(u.tackingForbidden ?? false)
     return {
       id: String(u.id ?? ''),
       name: String(u.name ?? ''),
@@ -252,7 +261,10 @@ export function migrateSavedGame(raw: RawRecord): GameState {
       // Speeds, drift and turning are the charts' to give, so whatever the save
       // holds for them is thrown away and read back from the ship's type.
       shipType,
-      ...shipStats(shipType, { scale, windStrength }),
+      ...charted,
+      turnPointsOverride,
+      maxTurnPoints: turnPointsOverride ?? charted.maxTurnPoints,
+      tackingForbidden,
       foreAndAftRigged,
       speedMultiplier: normaliseSpeedMultiplier(Number(u.speedMultiplier ?? 1)),
       baseWidth: Number(u.baseWidth ?? 30),
@@ -265,8 +277,9 @@ export function migrateSavedGame(raw: RawRecord): GameState {
       // A ship already in irons in a pre-8 save has no recorded swing direction.
       // Deriving it from its heading sends it out on the tack it is nearer to,
       // which is the only sensible reading of a state the save never captured.
-      tackDirection:
-        u.tackDirection === 'port' || u.tackDirection === 'starboard'
+      tackDirection: tackingForbidden
+        ? null
+        : u.tackDirection === 'port' || u.tackDirection === 'starboard'
           ? u.tackDirection
           : isInIrons
             ? tackTurnDirection(orientation, windDirection)

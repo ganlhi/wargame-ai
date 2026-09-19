@@ -18,6 +18,8 @@ function makeUnit(overrides: Partial<Unit> = {}): Unit {
     driftSpeed: 10, baseWidth: 30, baseLength: 80, firingArcs: [],
     attitude: 'reaching', isInIrons: false, tackDirection: null,
     prevAttitude: 'reaching', prevMoveDistance: null,
+    turnPointsOverride: null,
+    tackingForbidden: false,
     aiOrder: null,
     ...overrides,
   }

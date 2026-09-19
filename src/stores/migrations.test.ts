@@ -79,6 +79,28 @@ describe('migrateSavedGame — infinite table', () => {
     expect(onTerrain.originId).toBe('u1')
   })
 
+  it('reads an older save as describing a sound ship: no turning limit, free to tack', () => {
+    expect(game.units[0].turnPointsOverride).toBeNull()
+    expect(game.units[0].tackingForbidden).toBe(false)
+  })
+
+  it('keeps a turning limit and a shot-away helm, and holds such a ship out of the tack', () => {
+    const damaged = migrateSavedGame({
+      ...legacySave,
+      units: [
+        { ...legacySave.units[0], turnPointsOverride: 2 },
+        // Head to wind (the wind is easterly here) with her helm gone: a save
+        // from before would have put her into the procedure, and must not now.
+        { ...legacySave.units[1], orientation: 8, tackingForbidden: true },
+      ],
+    })
+    expect(damaged.units[0].turnPointsOverride).toBe(2)
+    expect(damaged.units[0].maxTurnPoints).toBe(2)
+    expect(damaged.units[1].isInIrons).toBe(true)
+    expect(damaged.units[1].tackingForbidden).toBe(true)
+    expect(damaged.units[1].tackDirection).toBeNull()
+  })
+
   it('drops the turn counter, the log and the old phase, opening at input', () => {
     expect('currentTurn' in game).toBe(false)
     expect('actionLog' in game).toBe(false)

@@ -275,9 +275,24 @@ export interface Unit {
   shipType: ShipType
   /**
    * Points she may turn in a game turn. From the binder's movement chart for
-   * her `shipType`; see `resolveUnit`, which rewrites it on every write.
+   * her `shipType`, unless `turnPointsOverride` says otherwise; see
+   * `resolveUnit`, which rewrites it on every write.
    */
   maxTurnPoints: number
+  /**
+   * How far she may swing in a turn when the charts no longer describe her —
+   * a wheel shot away, a rudder answering sluggishly, a jury rig. Entered
+   * during a game and kept through every re-rate, where the charted figure
+   * would otherwise be read straight back. null: as charted.
+   */
+  turnPointsOverride: number | null
+  /**
+   * She may not come about at all: rudder or wheel gone. The tacking procedure
+   * is closed to her, so the AI never declares one, and a ship left head to
+   * wind simply lies there and drifts rather than being put into the
+   * procedure. Her own to set — nothing derives it.
+   */
+  tackingForbidden: boolean
   /**
    * Fore-and-aft rigged ships point one point closer to the wind: they are in
    * irons only to 4 points off it, and beating from 5, where a square rig is
